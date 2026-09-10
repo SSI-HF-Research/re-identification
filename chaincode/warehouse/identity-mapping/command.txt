@@ -1,0 +1,10 @@
+./scripts/network.sh deployCC warehouse-channel identity-mapping ./chaincode/warehouse/identity-mapping 1.0 1 ./chaincode/warehouse/collections_config.json OrgIM OrgWPI OrgHDW
+
+export PATH=$PWD/bin:$PATH
+export FABRIC_CFG_PATH="$PWD/network"
+
+./scripts/network.sh invokeCC warehouse-channel identity-mapping   '{"function":"IdentityMappingContract:RegisterIdentityReference","Args":[]}'   '{"pii":"meu_dado_secreto","identityReference":"id-ref-001"}'   OrgIM OrgIM OrgWPI
+
+./scripts/network.sh queryCC OrgWPI warehouse-channel identity-mapping \
+  '{"Args":["IdentityMappingContract:GetPii","id-ref-001"]}'
+

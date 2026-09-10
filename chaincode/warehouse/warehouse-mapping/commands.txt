@@ -1,0 +1,11 @@
+./scripts/network.sh deployCC warehouse-channel warehouse-mapping ./chaincode/warehouse/warehouse-mapping 1.0 1 ./chaincode/warehouse/collections_config.json OrgWPI OrgHDW OrgIM
+
+./network.sh invokeCC warehouse-channel warehouse-mapping \
+  '{"function":"WarehouseMappingContract:RegisterWP","Args":["id-ref-001"]}' \
+  '{"wp":"pseudo-123"}' \
+  OrgWPI OrgWPI OrgHDW
+
+./network.sh queryCC OrgIM warehouse-channel warehouse-mapping \
+  '{"Args":["GetWP","id-ref-001"]}'
+
+./network.sh queryCC OrgIM warehouse-channel warehouse-mapping \ '{"Args":["GetPrivateDataHash","warehouse-mapping", "id-ref-001"]}'

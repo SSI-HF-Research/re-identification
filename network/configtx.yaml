@@ -1,0 +1,241 @@
+---
+Organizations:
+  - &OrdererOrg
+    Name: OrdererOrg
+    ID: OrdererMSP
+    MSPDir: crypto-config/ordererOrganizations/example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrdererMSP.admin')"
+
+  - &OrgIM
+    Name: OrgIMMSP
+    ID: OrgIMMSP
+    MSPDir: crypto-config/peerOrganizations/im.example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrgIMMSP.admin', 'OrgIMMSP.peer', 'OrgIMMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrgIMMSP.admin', 'OrgIMMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrgIMMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('OrgIMMSP.peer')"
+
+  - &OrgWPI
+    Name: OrgWPIMSP
+    ID: OrgWPIMSP
+    MSPDir: crypto-config/peerOrganizations/wpi.example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrgWPIMSP.admin', 'OrgWPIMSP.peer', 'OrgWPIMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrgWPIMSP.admin', 'OrgWPIMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrgWPIMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('OrgWPIMSP.peer')"
+
+  - &OrgHDW
+    Name: OrgHDWMSP
+    ID: OrgHDWMSP
+    MSPDir: crypto-config/peerOrganizations/hdw.example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrgHDWMSP.admin', 'OrgHDWMSP.peer', 'OrgHDWMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrgHDWMSP.admin', 'OrgHDWMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrgHDWMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('OrgHDWMSP.peer')"
+
+  - &OrgSC
+    Name: OrgSCMSP
+    ID: OrgSCMSP
+    MSPDir: crypto-config/peerOrganizations/sc.example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrgSCMSP.admin', 'OrgSCMSP.peer', 'OrgSCMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrgSCMSP.admin', 'OrgSCMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrgSCMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('OrgSCMSP.peer')"
+
+  - &OrgSPI
+    Name: OrgSPIMSP
+    ID: OrgSPIMSP
+    MSPDir: crypto-config/peerOrganizations/spi.example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrgSPIMSP.admin', 'OrgSPIMSP.peer', 'OrgSPIMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrgSPIMSP.admin', 'OrgSPIMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrgSPIMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('OrgSPIMSP.peer')"
+
+Capabilities:
+  Channel: &ChannelCapabilities
+    V2_0: true
+  Orderer: &OrdererCapabilities
+    V2_0: true
+  Application: &ApplicationCapabilities
+    V2_5: true
+
+Application: &ApplicationDefaults
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    Endorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+  Capabilities:
+    <<: *ApplicationCapabilities
+
+Orderer: &OrdererDefaults
+  OrdererType: etcdraft
+  Addresses:
+    - orderer.example.com:7050
+  EtcdRaft:
+    Consenters:
+      - Host: orderer.example.com
+        Port: 7050
+        ClientTLSCert: crypto-config/ordererOrganizations/example.com/orderers/orderer.example.com/tls/server.crt
+        ServerTLSCert: crypto-config/ordererOrganizations/example.com/orderers/orderer.example.com/tls/server.crt
+  BatchTimeout: 2s
+  BatchSize:
+    MaxMessageCount: 10
+    AbsoluteMaxBytes: 99 MB
+    PreferredMaxBytes: 512 KB
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    BlockValidation:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+  Capabilities:
+    <<: *OrdererCapabilities
+
+Channel: &ChannelDefaults
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+  Capabilities:
+    <<: *ChannelCapabilities
+
+# ================================================================
+# PERFIS
+# ================================================================
+Profiles:
+  # Perfil do System Channel
+  SystemChannel:
+    <<: *ChannelDefaults
+    Orderer:
+      <<: *OrdererDefaults
+      Organizations:
+        - *OrdererOrg
+      Capabilities:
+        <<: *OrdererCapabilities
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *OrdererOrg
+      Capabilities:
+        <<: *ApplicationCapabilities
+    Consortiums:
+      SampleConsortium:
+        Organizations:
+          - *OrgIM
+          - *OrgWPI
+          - *OrgHDW
+          - *OrgSC
+          - *OrgSPI
+
+  # Perfil do Warehouse Channel
+  WarehouseChannel:
+    Consortium: SampleConsortium
+    <<: *ChannelDefaults
+    Orderer:
+      <<: *OrdererDefaults
+      Organizations:
+        - *OrdererOrg
+      Capabilities:
+        <<: *OrdererCapabilities
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *OrgIM
+        - *OrgWPI
+        - *OrgHDW
+      Capabilities:
+        <<: *ApplicationCapabilities
+
+  # Perfil do Study Channel
+  StudyChannel:
+    Consortium: SampleConsortium
+    <<: *ChannelDefaults
+    Orderer:
+      <<: *OrdererDefaults
+      Organizations:
+        - *OrdererOrg
+      Capabilities:
+        <<: *OrdererCapabilities
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *OrgSC
+        - *OrgSPI
+      Capabilities:
+        <<: *ApplicationCapabilities

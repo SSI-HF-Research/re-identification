@@ -1,0 +1,67 @@
+OrdererOrgs:
+  - Name: Orderer
+    Domain: example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: orderer
+        SANS:
+          - localhost
+          - 127.0.0.1
+
+PeerOrgs:
+  # ----Warehouse Channel----
+  - Name: OrgIM
+    Domain: im.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+        SANS:
+          - localhost
+          - 127.0.0.1
+    Users:
+      Count: 1
+
+  - Name: OrgWPI
+    Domain: wpi.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+        SANS:
+          - localhost
+          - 127.0.0.1
+    Users:
+      Count: 1
+
+  - Name: OrgHDW
+    Domain: hdw.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+        SANS:
+          - localhost
+          - 127.0.0.1
+    Users:
+      Count: 1
+
+  # ---- Study Channel ----
+  - Name: OrgSC
+    Domain: sc.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+        SANS:
+          - localhost
+          - 127.0.0.1
+    Users:
+      Count: 1
+
+  - Name: OrgSPI
+    Domain: spi.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+        SANS:
+          - localhost
+          - 127.0.0.1
+    Users:
+      Count: 1

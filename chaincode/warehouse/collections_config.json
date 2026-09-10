@@ -1,0 +1,28 @@
+[
+  {
+    "name": "Identity_Mapping",
+    "policy": "OR('OrgIMMSP.member', 'OrgWPIMSP.member')",
+    "requiredPeerCount": 0,
+    "maxPeerCount": 3,
+    "blockToLive": 0,
+    "memberOnlyRead": true,
+    "memberOnlyWrite": true,
+    "endorsementPolicy": {
+      "signaturePolicy":
+        "AND('OrgIMMSP.member', 'OrgWPIMSP.member')"
+    }
+  },
+
+  {
+    "name": "Warehouse_Mapping",
+    "policy": "OR('OrgWPIMSP.member', 'OrgHDWMSP.member')",
+    "requiredPeerCount": 0,
+    "maxPeerCount": 3,
+    "blockToLive": 0,
+    "memberOnlyRead": true,
+    "memberOnlyWrite": true,
+    "endorsementPolicy": {
+      "signaturePolicy": "AND('OrgWPIMSP.member', 'OrgHDWMSP.member')"
+    }
+  }
+]
