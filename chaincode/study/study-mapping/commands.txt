@@ -1,0 +1,13 @@
+./network.sh deployCC study-channel study-mapping \
+  ./chaincode/study/study-mapping 3.0 3 \
+  ./chaincode/study/collections_config.json \
+  OrgSC OrgSPI
+
+./network.sh invokeCC study-channel study-mapping \
+  '{"function":"StudyMappingContract:RegisterSPBatch","Args":["datamart-2"]}' \
+  '{"studyKey":"study-key-2","wpList":"[\"wp1\",\"wp2\"]"}' \
+  OrgSPI OrgSC OrgSPI
+
+./network.sh queryCC OrgSC study-channel study-mapping   '{"Args":["StudyMappingContract:GetSPListByDatamart","datamart-2"]}'
+
+./network.sh queryCC OrgSC study-channel study-mapping   '{"Args":["StudyMappingContract:GetWPBySP","0780c6776299c4056f1841fb16ba9cc73100d8186000a39fd0f02cfb0bbfc284"]}'
