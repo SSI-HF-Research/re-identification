@@ -105,6 +105,42 @@ Organizations:
         Type: Signature
         Rule: "OR('OrgSPIMSP.peer')"
 
+  - &OrgMO
+    Name: OrgMOMSP
+    ID: OrgMOMSP
+    MSPDir: crypto-config/peerOrganizations/mo.example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrgMOMSP.admin', 'OrgMOMSP.peer', 'OrgMOMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrgMOMSP.admin', 'OrgMOMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrgMOMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('OrgMOMSP.peer')"
+
+  - &OrgRO
+    Name: OrgROMSP
+    ID: OrgROMSP
+    MSPDir: crypto-config/peerOrganizations/ro.example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrgROMSP.admin', 'OrgROMSP.peer', 'OrgROMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrgROMSP.admin', 'OrgROMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrgROMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('OrgROMSP.peer')"
+
 Capabilities:
   Channel: &ChannelCapabilities
     V2_0: true
@@ -202,6 +238,8 @@ Profiles:
           - *OrgHDW
           - *OrgSC
           - *OrgSPI
+          - *OrgMO
+          - *OrgRO
 
   # Perfil do Warehouse Channel
   WarehouseChannel:
@@ -219,6 +257,8 @@ Profiles:
         - *OrgIM
         - *OrgWPI
         - *OrgHDW
+        - *OrgMO
+        - *OrgRO
       Capabilities:
         <<: *ApplicationCapabilities
 
@@ -237,5 +277,7 @@ Profiles:
       Organizations:
         - *OrgSC
         - *OrgSPI
+        - *OrgMO
+        - *OrgRO
       Capabilities:
         <<: *ApplicationCapabilities

@@ -2,12 +2,15 @@
 import { Context, Contract, Returns, Transaction } from 'fabric-contract-api';
 
 const WAREHOUSE_MAPPING_COLLECTION = 'Warehouse_Mapping';
-
 const WPI_MSP_ID = 'OrgWPIMSP';
 
 interface WarehouseMappingValue {
   identityReference: string;
   wp: string;
+}
+
+interface WarehouseMappingReverseValue {
+  identityReference: string;
 }
 
 export class WarehouseMappingContract extends Contract {
@@ -23,7 +26,10 @@ export class WarehouseMappingContract extends Contract {
 
   /**
    * save_WP(identity_reference_i, WP_i)
-   * WP is calculated OFF-CHAIN by the WPI (HMAC(WP_MASTER_KEY, PII_i))
+   * WP is generated OFF-CHAIN by WPI: HMAC(WP_MASTER_KEY, PII_i)
+   * Saves:
+   *   ref:<identityReference> -> { identityReference, wp }
+   *   wp:<wp>                 -> { identityReference }
    */
   @Transaction()
   @Returns('string')
@@ -46,20 +52,66 @@ export class WarehouseMappingContract extends Contract {
       throw new Error('Transient field "wp" must not be empty');
     }
 
-    const key = `ref:${identityReference}`;
-    const existing = await ctx.stub.getPrivateData(WAREHOUSE_MAPPING_COLLECTION, key);
-    if (existing && existing.length > 0) {
+    const refKey = `ref:${identityReference}`;
+    const wpKey = `wp:${wp}`;
+
+    const existingRef = await ctx.stub.getPrivateData(
+      WAREHOUSE_MAPPING_COLLECTION,
+      refKey
+    );
+    if (existingRef && existingRef.length > 0) {
+      const existingValue = JSON.parse(existingRef.toString()) as WarehouseMappingValue;
+      if (existingValue.wp !== wp) {
+        throw new Error(
+          `identityReference ${identityReference} already bound to another WP`
+        );
+      }
+
+      const existingRev = await ctx.stub.getPrivateData(
+        WAREHOUSE_MAPPING_COLLECTION,
+        wpKey
+      );
+      if (!existingRev || existingRev.length === 0) {
+        const revValue: WarehouseMappingReverseValue = { identityReference };
+        await ctx.stub.putPrivateData(
+          WAREHOUSE_MAPPING_COLLECTION,
+          wpKey,
+          Buffer.from(JSON.stringify(revValue))
+        );
+      }
+
       return `WP already registered for identityReference ${identityReference}`;
+    }
+
+    const existingRev = await ctx.stub.getPrivateData(
+      WAREHOUSE_MAPPING_COLLECTION,
+      wpKey
+    );
+    if (existingRev && existingRev.length > 0) {
+      const rev = JSON.parse(existingRev.toString()) as WarehouseMappingReverseValue;
+      if (rev.identityReference !== identityReference) {
+        throw new Error(
+          `WP already bound to another identityReference (${rev.identityReference})`
+        );
+      }
     }
 
     const value: WarehouseMappingValue = { identityReference, wp };
     await ctx.stub.putPrivateData(
       WAREHOUSE_MAPPING_COLLECTION,
-      key,
+      refKey,
       Buffer.from(JSON.stringify(value))
     );
-    console.log(value);
-    return "wp registered";
+
+    const revValue: WarehouseMappingReverseValue = { identityReference };
+    await ctx.stub.putPrivateData(
+      WAREHOUSE_MAPPING_COLLECTION,
+      wpKey,
+      Buffer.from(JSON.stringify(revValue))
+    );
+    
+    ctx.stub.setEvent('WPRegistered', Buffer.from(JSON.stringify({ identityReference })));
+    return 'wp registered';
   }
 
   @Transaction(false)
@@ -69,10 +121,22 @@ export class WarehouseMappingContract extends Contract {
     const bytes = await ctx.stub.getPrivateData(WAREHOUSE_MAPPING_COLLECTION, key);
     if (!bytes || bytes.length === 0) return '';
     const value = JSON.parse(bytes.toString()) as WarehouseMappingValue;
-
     return value.wp;
   }
-  
+
+  /**
+   * reverse lookup: WP -> identityReference.
+   * used for re-identification
+   */
+  @Transaction(false)
+  @Returns('string')
+  public async GetIdentityReferenceByWP(ctx: Context, wp: string): Promise<string> {
+    const key = `wp:${wp}`;
+    const bytes = await ctx.stub.getPrivateData(WAREHOUSE_MAPPING_COLLECTION, key);
+    if (!bytes || bytes.length === 0) return '';
+    const value = JSON.parse(bytes.toString()) as WarehouseMappingReverseValue;
+    return value.identityReference;
+  }
 
   // ---------------------------------------------------------------------------
   // Helpers

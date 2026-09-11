@@ -32,6 +32,7 @@ export class IdentityMappingContract extends Contract {
     const key = `ref:${identityReference}`;
     const existing = await ctx.stub.getPrivateData(IDENTITY_MAPPING_COLLECTION, key);
     if (existing && existing.length > 0) {
+      ctx.stub.setEvent('IdentityAlreadyExists', Buffer.from(JSON.stringify({identityReference})));
       console.log(`Identity reference already exists. Skipping creation.`);
       return; 
     }
@@ -42,6 +43,8 @@ export class IdentityMappingContract extends Contract {
       key,
       Buffer.from(JSON.stringify(value))
     );
+    ctx.stub.setEvent('IdentityRegistered', Buffer.from(JSON.stringify({identityReference})));
+
   }
 
   @Transaction(false)

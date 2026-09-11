@@ -65,3 +65,27 @@ PeerOrgs:
           - 127.0.0.1
     Users:
       Count: 1
+
+# BOTH CHANNELS
+
+  - Name: OrgMO
+    Domain: mo.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+        SANS:
+          - localhost
+          - 127.0.0.1
+    Users:
+      Count: 1
+
+  - Name: OrgRO
+    Domain: ro.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+        SANS:
+          - localhost
+          - 127.0.0.1
+    Users:
+      Count: 1

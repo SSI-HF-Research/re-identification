@@ -68,6 +68,7 @@ export class StudyMappingContract extends Contract {
       this.datamartKey(datamartId),
       Buffer.from(JSON.stringify(datamartMap))
     );
+    ctx.stub.setEvent('SPBatchRegistered', Buffer.from(JSON.stringify({ datamartId, count: wpList.length })));
   }
 
   @Transaction(false)
@@ -75,7 +76,7 @@ export class StudyMappingContract extends Contract {
   public async GetSPListByDatamart(ctx: Context, datamartId: string): Promise<string> {
     const bytes = await ctx.stub.getPrivateData(STUDY_MAPPING_COLLECTION, this.datamartKey(datamartId));
     if (!bytes || bytes.length === 0) return '{}';
-    return bytes.toString(); // {"wp1":"sp1","wp2":"sp2",...}
+    return bytes.toString();
   }
 
   @Transaction(false)
