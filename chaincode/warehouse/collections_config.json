@@ -1,6 +1,6 @@
 [
   {
-    "name": "Identity_Mapping",
+    "name": "IdentityMapping",
     "policy": "OR('OrgIMMSP.member', 'OrgWPIMSP.member')",
     "requiredPeerCount": 0,
     "maxPeerCount": 3,
@@ -14,8 +14,21 @@
   },
 
   {
-    "name": "Warehouse_Mapping",
+    "name": "WarehouseMapping",
     "policy": "OR('OrgWPIMSP.member', 'OrgHDWMSP.member')",
+    "requiredPeerCount": 0,
+    "maxPeerCount": 3,
+    "blockToLive": 0,
+    "memberOnlyRead": true,
+    "memberOnlyWrite": true,
+    "endorsementPolicy": {
+      "signaturePolicy": "AND('OrgWPIMSP.member', 'OrgHDWMSP.member')"
+    }
+  },
+
+  {
+    "name": "WarehouseReIdentification",
+    "policy": "OR('OrgWPIMSP.member', 'OrgMOMSP.member')",
     "requiredPeerCount": 0,
     "maxPeerCount": 3,
     "blockToLive": 0,

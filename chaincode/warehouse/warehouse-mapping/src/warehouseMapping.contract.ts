@@ -1,7 +1,7 @@
 // warehouseMapping.contract.ts
 import { Context, Contract, Returns, Transaction } from 'fabric-contract-api';
 
-const WAREHOUSE_MAPPING_COLLECTION = 'Warehouse_Mapping';
+const WAREHOUSE_MAPPING_COLLECTION = 'WarehouseMapping';
 const WPI_MSP_ID = 'OrgWPIMSP';
 
 interface WarehouseMappingValue {

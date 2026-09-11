@@ -1,6 +1,6 @@
 import { Context, Contract, Info, Returns, Transaction } from 'fabric-contract-api';
 
-const IDENTITY_MAPPING_COLLECTION = 'Identity_Mapping';
+const IDENTITY_MAPPING_COLLECTION = 'IdentityMapping';
 const IM_MSP_ID = 'OrgIMMSP';
 
 interface IdentityMappingValue {

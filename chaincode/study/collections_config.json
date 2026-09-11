@@ -1,6 +1,6 @@
 [
   {
-    "name": "Study_Mapping",
+    "name": "StudyMapping",
     "policy": "OR('OrgSCMSP.member', 'OrgSPIMSP.member')",
     "requiredPeerCount": 0,
     "maxPeerCount": 3,
@@ -10,6 +10,19 @@
     "endorsementPolicy": {
       "signaturePolicy":
         "AND('OrgSCMSP.member', 'OrgSPIMSP.member')"
+    }
+  },
+
+  {
+    "name": "StudyReIdentification",
+    "policy": "OR('OrgSPIMSP.member', 'OrgROMSP.member')",
+    "requiredPeerCount": 0,
+    "maxPeerCount": 3,
+    "blockToLive": 0,
+    "memberOnlyRead": true,
+    "memberOnlyWrite": true,
+    "endorsementPolicy": {
+      "signaturePolicy": "AND('OrgSPIMSP.member', 'OrgROMSP.member')"
     }
   }
 ]

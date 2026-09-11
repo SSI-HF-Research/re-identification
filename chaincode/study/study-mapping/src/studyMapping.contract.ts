@@ -1,7 +1,7 @@
 import { Context, Contract, Returns, Transaction } from 'fabric-contract-api';
 import { createHmac } from 'crypto';
 
-const STUDY_MAPPING_COLLECTION = 'Study_Mapping';
+const STUDY_MAPPING_COLLECTION = 'StudyMapping';
 
 interface StudyMappingReverseValue {
   wp: string;
