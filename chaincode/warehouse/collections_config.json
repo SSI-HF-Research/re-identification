@@ -35,7 +35,7 @@
     "memberOnlyRead": true,
     "memberOnlyWrite": true,
     "endorsementPolicy": {
-      "signaturePolicy": "AND('OrgWPIMSP.member', 'OrgHDWMSP.member')"
+      "signaturePolicy": "AND('OrgWPIMSP.member', 'OrgMOMSP.member')"
     }
   }
 ]
