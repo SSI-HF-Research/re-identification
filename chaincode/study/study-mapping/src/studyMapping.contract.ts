@@ -26,7 +26,7 @@ export class StudyMappingContract extends Contract {
   }
 
   @Transaction()
-  public async RegisterSPBatch(ctx: Context, datamartId: string): Promise<void> {
+  public async RegisterSPBatch(ctx: Context, datamartId: string): Promise<string> {
     const transient = ctx.stub.getTransient();
     if (!transient.has('studyKey') || !transient.has('wpList')) {
       throw new Error('Transient fields "studyKey" and "wpList" are required');
@@ -44,11 +44,20 @@ export class StudyMappingContract extends Contract {
       throw new Error('"wpList" must be a non-empty array');
     }
 
-    const existingDatamart = await ctx.stub.getPrivateData(STUDY_MAPPING_COLLECTION, this.datamartKey(datamartId));
-    if (existingDatamart && existingDatamart.length > 0) {
-      return;
+    const existing = await ctx.stub.getPrivateData(STUDY_MAPPING_COLLECTION, this.datamartKey(datamartId));
+    if (existing && existing.length > 0) {
+      const oldMap = JSON.parse(existing.toString()) as Record<string,string>;
+      const oldKeys = Object.keys(oldMap).sort();
+      const newKeys = [...wpList].sort();
+      const same =
+        oldKeys.length === newKeys.length &&
+        oldKeys.every((k, i) => k === newKeys[i]);
+      if (same) {
+        ctx.stub.setEvent('SPBatchAlreadyRegistered',
+          Buffer.from(JSON.stringify({ datamartId, count: wpList.length })));
+        return "SP batch already registered. Skipping creation.";
+      }
     }
-
     const datamartMap: Record<string, string> = {};
 
     for (const wp of wpList) {
@@ -69,6 +78,7 @@ export class StudyMappingContract extends Contract {
       Buffer.from(JSON.stringify(datamartMap))
     );
     ctx.stub.setEvent('SPBatchRegistered', Buffer.from(JSON.stringify({ datamartId, count: wpList.length })));
+    return "SP batch registered successfully.";
   }
 
   @Transaction(false)

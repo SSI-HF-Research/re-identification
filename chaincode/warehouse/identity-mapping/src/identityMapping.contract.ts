@@ -21,7 +21,8 @@ export class IdentityMappingContract extends Contract {
   }
 
   @Transaction()
-  public async RegisterIdentityReference(ctx: Context): Promise<void> {
+  @Returns('string')
+  public async RegisterIdentityReference(ctx: Context): Promise<string> {
     const transient = ctx.stub.getTransient();
     if (!transient.has('pii') || !transient.has('identityReference')) {
       throw new Error('Transient fields "pii" and "identityReference" are required');
@@ -33,8 +34,7 @@ export class IdentityMappingContract extends Contract {
     const existing = await ctx.stub.getPrivateData(IDENTITY_MAPPING_COLLECTION, key);
     if (existing && existing.length > 0) {
       ctx.stub.setEvent('IdentityAlreadyExists', Buffer.from(JSON.stringify({identityReference})));
-      console.log(`Identity reference already exists. Skipping creation.`);
-      return; 
+      return `Identity reference already exists. Skipping creation.`; 
     }
 
     const value: IdentityMappingValue = { identityReference, pii };
@@ -44,7 +44,7 @@ export class IdentityMappingContract extends Contract {
       Buffer.from(JSON.stringify(value))
     );
     ctx.stub.setEvent('IdentityRegistered', Buffer.from(JSON.stringify({identityReference})));
-
+    return `Identity reference registered successfully.`;
   }
 
   @Transaction(false)
