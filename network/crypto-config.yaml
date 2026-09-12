@@ -90,8 +90,8 @@ PeerOrgs:
     Users:
       Count: 1
 
-  - Name: OrgEC
-    Domain: ec.example.com
+  - Name: OrgEC1
+    Domain: ec1.example.com
     EnableNodeOUs: true
     Specs:
       - Hostname: peer0
@@ -99,4 +99,27 @@ PeerOrgs:
           - localhost
           - 127.0.0.1
     Users:
-      Count: 3
+      Count: 1
+
+  - Name: OrgEC2
+    Domain: ec2.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+        SANS:
+          - localhost
+          - 127.0.0.1
+    Users:
+      Count: 1
+
+
+  - Name: OrgEC3
+    Domain: ec3.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: peer0
+        SANS:
+          - localhost
+          - 127.0.0.1
+    Users:
+      Count: 1

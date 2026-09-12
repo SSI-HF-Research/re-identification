@@ -1,1 +1,1 @@
-./scripts/network.sh deployCC study-channel study-reidentification ./chaincode/study/study-reidentification 1.0 1 ./chaincode/study/collections_config.json OrgSC OrgSPI OrgRO OrgMO
+./scripts/network.sh deployCC study-channel study-reidentification ./chaincode/study/study-reidentification 1.0 1 ./chaincode/study/collections_config.json OrgSC OrgSPI OrgRO OrgMO OrgEC

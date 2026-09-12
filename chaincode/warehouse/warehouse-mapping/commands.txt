@@ -1,4 +1,4 @@
-./scripts/network.sh deployCC warehouse-channel warehouse-mapping ./chaincode/warehouse/warehouse-mapping 1.0 1 ./chaincode/warehouse/collections_config.json OrgWPI OrgHDW OrgIM OrgMO OrgRO
+./scripts/network.sh deployCC warehouse-channel warehouse-mapping ./chaincode/warehouse/warehouse-mapping 1.0 1 ./chaincode/warehouse/collections_config.json OrgWPI OrgHDW OrgIM OrgMO OrgRO OrgEC
 
 ./network.sh invokeCC warehouse-channel warehouse-mapping \
   '{"function":"WarehouseMappingContract:RegisterWP","Args":["id-ref-001"]}' \
