@@ -141,6 +141,25 @@ Organizations:
         Type: Signature
         Rule: "OR('OrgROMSP.peer')"
 
+  - &OrgEC
+    Name: OrgECMSP
+    ID: OrgECMSP
+    MSPDir: crypto-config/peerOrganizations/ec.example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrgECMSP.admin', 'OrgECMSP.peer', 'OrgECMSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrgECMSP.admin', 'OrgECMSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrgECMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('OrgECMSP.peer')"
+
+
 Capabilities:
   Channel: &ChannelCapabilities
     V2_0: true
@@ -212,10 +231,10 @@ Channel: &ChannelDefaults
     <<: *ChannelCapabilities
 
 # ================================================================
-# PERFIS
+# PROFILES
 # ================================================================
 Profiles:
-  # Perfil do System Channel
+  # Profiles for System Channel
   SystemChannel:
     <<: *ChannelDefaults
     Orderer:
@@ -240,8 +259,9 @@ Profiles:
           - *OrgSPI
           - *OrgMO
           - *OrgRO
+          - *OrgEC
 
-  # Perfil do Warehouse Channel
+  # Profiles for Warehouse Channel
   WarehouseChannel:
     Consortium: SampleConsortium
     <<: *ChannelDefaults
@@ -259,10 +279,11 @@ Profiles:
         - *OrgHDW
         - *OrgMO
         - *OrgRO
+        - *OrgEC
       Capabilities:
         <<: *ApplicationCapabilities
 
-  # Perfil do Study Channel
+  # Profiles for Study Channel
   StudyChannel:
     Consortium: SampleConsortium
     <<: *ChannelDefaults
@@ -279,5 +300,6 @@ Profiles:
         - *OrgSPI
         - *OrgMO
         - *OrgRO
+        - *OrgEC
       Capabilities:
         <<: *ApplicationCapabilities
