@@ -1,7 +1,7 @@
 ./scripts/network.sh deployCC study-channel study-mapping \
   ./chaincode/study/study-mapping 1.0 1 \
   ./chaincode/study/collections_config.json \
-  OrgSC OrgSPI OrgMO OrgRO OrgEC
+  OrgSC OrgSPI OrgMO OrgRO OrgEC1 OrgEC2 OrgEC3
 
 ./network.sh invokeCC study-channel study-mapping \
   '{"function":"StudyMappingContract:RegisterSPBatch","Args":["datamart-2"]}' \
