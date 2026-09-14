@@ -6,10 +6,13 @@ const WPI_MSP_ID = 'OrgWPIMSP';
 const MO_MSP_ID  = 'OrgMOMSP';
 const EC_MSP_IDS = ['OrgEC1MSP', 'OrgEC2MSP', 'OrgEC3MSP'];
 const K_OF_N_THRESHOLD = 2;
+const REID_KEY_PREFIX = 'reid:';
+const EC_KEY_PREFIX = 'ec_key:';
 
 interface ReIDEntry { reqId: string; pii: string; registeredAt: string; }
 interface ReIDApproval { mspId: string; decision: 'approve' | 'reject'; signature: string; }
 
+/** Verifies an ECDSA signature over a UTF-8 message using a PEM public key. */
 function verifyEcdsa(publicKeyPem: string, message: string, signatureB64: string): boolean {
   try {
     const v = createVerify('SHA256');
@@ -20,29 +23,46 @@ function verifyEcdsa(publicKeyPem: string, message: string, signatureB64: string
 }
 
 export class WarehouseReIdentificationContract extends Contract {
+  /** Creates the Fabric contract with its registered contract name. */
   constructor() { super('WarehouseReIdentificationContract'); }
 
+  /** Confirms that the warehouse re-identification chaincode is installed and reachable. */
   @Transaction(false) @Returns('string')
   public async testChaincode(ctx: Context): Promise<string> {
     return 'WarehouseReIdentificationContract is working!';
   }
 
+  /**
+   * Registers or replaces the public key for an authorized EC committee member.
+   *
+   * @param ctx Fabric transaction context and caller identity
+   * @param publicKeyPem EC member public key in PEM format
+   * @throws when the caller is not an EC member or the key is missing
+   */
   @Transaction()
   public async RegisterCommitteeMember(ctx: Context, publicKeyPem: string): Promise<void> {
     const mspId = ctx.clientIdentity.getMSPID();
     if (!EC_MSP_IDS.includes(mspId)) {
       throw new Error(`Only EC members can register keys (caller=${mspId})`);
     }
-    if (!publicKeyPem) throw new Error('publicKeyPem is required');
-    await ctx.stub.putState(`ec_key:${mspId}`, Buffer.from(publicKeyPem));
+    if (!publicKeyPem || publicKeyPem.trim().length === 0) {
+      throw new Error('publicKeyPem is required');
+    }
+    await ctx.stub.putState(this.getCommitteeKey(mspId), Buffer.from(publicKeyPem));
     ctx.stub.setEvent('CommitteeMemberRegistered',
       Buffer.from(JSON.stringify({ mspId })));
   }
 
   /**
-   * RegisterReIdentifiedPII
-   * Transient: { pii, approvals (JSON) }
-   * Verifies K-of-N EC signatures before writing PII to the PDC.
+   * Stores re-identified PII in private data after validating K-of-N EC approvals.
+   *
+   * The caller must be WPI. The PII and JSON-encoded approvals are supplied through
+   * transient data so that they are not written to the public ledger.
+   *
+   * @param ctx Fabric transaction context and caller identity
+   * @param reqId re-identification request identifier
+   * @returns a message describing whether the value was stored or already existed
+   * @throws when transient input is invalid or insufficient approvals are valid
    */
   @Transaction() @Returns('string')
   public async RegisterReIdentifiedPII(ctx: Context, reqId: string): Promise<string> {
@@ -50,25 +70,19 @@ export class WarehouseReIdentificationContract extends Contract {
     if (!reqId) throw new Error('reqId is required');
 
     const transient = ctx.stub.getTransient();
-    if (!transient.has('pii'))       throw new Error('Transient "pii" required');
-    if (!transient.has('approvals')) throw new Error('Transient "approvals" required');
-
-    const pii = Buffer.from(transient.get('pii')!).toString('utf8');
-    const approvalsRaw = Buffer.from(transient.get('approvals')!).toString('utf8');
-
-    let approvals: ReIDApproval[];
-    try { approvals = JSON.parse(approvalsRaw); }
-    catch { throw new Error('Transient "approvals" must be JSON'); }
-    if (!Array.isArray(approvals)) throw new Error('"approvals" must be an array');
+    const pii = this.getRequiredTransientValue(transient, 'pii');
+    const approvals = this.parseApprovals(
+      this.getRequiredTransientValue(transient, 'approvals')
+    );
 
     const approveCount = await this.verifyApprovals(ctx, reqId, approvals);
     if (approveCount < K_OF_N_THRESHOLD) {
       throw new Error(`Insufficient valid approvals (got ${approveCount}, need ${K_OF_N_THRESHOLD})`);
     }
 
-    const key = `reid:${reqId}`;
-    const existing = await ctx.stub.getPrivateData(PDC_COLLECTION, key);
-    if (existing && existing.length > 0) {
+    const key = this.getReIdKey(reqId);
+    const existing = await this.getPrivateData<ReIDEntry>(ctx, key);
+    if (existing) {
       return `reqId ${reqId} already registered, skipping.`;
     }
 
@@ -85,14 +99,31 @@ export class WarehouseReIdentificationContract extends Contract {
     return 'Re-identified PII registered.';
   }
 
+  /**
+   * Retrieves re-identified PII from private data for the medical organization.
+   *
+   * @param ctx Fabric transaction context and caller identity
+   * @param reqId re-identification request identifier
+   * @returns the PII associated with the request
+   * @throws when the caller is not MO or the request does not exist
+   */
   @Transaction(false) @Returns('string')
   public async GetReidentifiedPII(ctx: Context, reqId: string): Promise<string> {
     this.assertCallerIs(ctx, MO_MSP_ID);
-    const b = await ctx.stub.getPrivateData(PDC_COLLECTION, `reid:${reqId}`);
-    if (!b || b.length === 0) throw new Error(`reqId ${reqId} not found`);
-    return (JSON.parse(b.toString()) as ReIDEntry).pii;
+    const entry = await this.getPrivateData<ReIDEntry>(ctx, this.getReIdKey(reqId));
+    if (!entry) throw new Error(`reqId ${reqId} not found`);
+    return entry.pii;
   }
 
+  /**
+   * Validates each committee signature and counts approvals for a request.
+   *
+   * @param ctx Fabric transaction context used to read registered public keys
+   * @param reqId re-identification request identifier being approved
+   * @param approvals committee decisions and their signatures
+   * @returns the number of valid approvals
+   * @throws when an approval is unknown, duplicated, unsigned, or invalid
+   */
   private async verifyApprovals(
     ctx: Context, reqId: string, approvals: ReIDApproval[]
   ): Promise<number> {
@@ -107,12 +138,15 @@ export class WarehouseReIdentificationContract extends Contract {
       }
       seen.add(a.mspId);
 
-      const pubBytes = await ctx.stub.getState(`ec_key:${a.mspId}`);
-      if (!pubBytes || pubBytes.length === 0) {
+      const publicKeyPem = await this.getCommitteePublicKey(ctx, a.mspId);
+      if (!publicKeyPem) {
         throw new Error(`No public key registered for ${a.mspId}`);
       }
+      if (a.decision !== 'approve' && a.decision !== 'reject') {
+        throw new Error(`Invalid decision from ${a.mspId}`);
+      }
       const message = `reid_approval:${reqId}:${a.decision}`;
-      if (!verifyEcdsa(pubBytes.toString(), message, a.signature)) {
+      if (!verifyEcdsa(publicKeyPem, message, a.signature)) {
         throw new Error(`Invalid signature from ${a.mspId}`);
       }
       if (a.decision === 'approve') approveCount++;
@@ -120,6 +154,75 @@ export class WarehouseReIdentificationContract extends Contract {
     return approveCount;
   }
 
+  /** Builds the private-data key for a re-identification request. */
+  private getReIdKey(reqId: string): string {
+    return `${REID_KEY_PREFIX}${reqId}`;
+  }
+
+  /** Builds the world-state key for an EC committee public key. */
+  private getCommitteeKey(mspId: string): string {
+    return `${EC_KEY_PREFIX}${mspId}`;
+  }
+
+  /** Reads and deserializes a JSON value from the re-identification collection. */
+  private async getPrivateData<T>(ctx: Context, key: string): Promise<T | undefined> {
+    const bytes = await ctx.stub.getPrivateData(PDC_COLLECTION, key);
+    if (!bytes || bytes.length === 0) return undefined;
+    return JSON.parse(bytes.toString()) as T;
+  }
+
+  /** Reads the registered public key for an EC committee member. */
+  private async getCommitteePublicKey(ctx: Context, mspId: string): Promise<string | undefined> {
+    const bytes = await ctx.stub.getState(this.getCommitteeKey(mspId));
+    if (!bytes || bytes.length === 0) return undefined;
+    return bytes.toString();
+  }
+
+  /** Decodes a required non-empty UTF-8 value from transient transaction data. */
+  private getRequiredTransientValue(
+    transient: Map<string, Uint8Array>,
+    fieldName: string
+  ): string {
+    const value = transient.get(fieldName);
+    if (!value) throw new Error(`Transient "${fieldName}" is required`);
+    const decodedValue = Buffer.from(value).toString('utf8');
+    if (!decodedValue) throw new Error(`Transient "${fieldName}" must not be empty`);
+    return decodedValue;
+  }
+
+  /** Parses and validates the JSON approval list supplied through transient data. */
+  private parseApprovals(rawApprovals: string): ReIDApproval[] {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawApprovals);
+    } catch {
+      throw new Error('Transient "approvals" must be JSON');
+    }
+    if (!Array.isArray(parsed)) throw new Error('"approvals" must be an array');
+
+    return parsed.map((approval) => {
+      if (!approval || typeof approval !== 'object' || Array.isArray(approval)) {
+        throw new Error('Each approval must be an object');
+      }
+      const value = approval as Partial<ReIDApproval>;
+      if (typeof value.mspId !== 'string' || value.mspId.length === 0) {
+        throw new Error('Each approval must include an mspId');
+      }
+      if (value.decision !== 'approve' && value.decision !== 'reject') {
+        throw new Error(`Invalid decision from ${value.mspId}`);
+      }
+      if (typeof value.signature !== 'string' || value.signature.length === 0) {
+        throw new Error(`Approval from ${value.mspId} must include a signature`);
+      }
+      return {
+        mspId: value.mspId,
+        decision: value.decision,
+        signature: value.signature,
+      };
+    });
+  }
+
+  /** Ensures that the transaction caller belongs to the expected organization. */
   private assertCallerIs(ctx: Context, expectedMsp: string): void {
     const mspId = ctx.clientIdentity.getMSPID();
     if (mspId !== expectedMsp) {

@@ -29,10 +29,33 @@ interface ReIDResult {
 }
 interface ReIDApproval { mspId: string; decision: Decision; signature: string; }
 
+/** Builds the world-state key for a re-identification request. */
+function requestStateKey(reqId: string): string {
+  return `reid_request:${reqId}`;
+}
+
+/** Builds the world-state key for one EC member's approval. */
+function approvalStateKey(reqId: string, mspId: string): string {
+  return `reid_approval:${reqId}:${mspId}`;
+}
+
+/** Builds the private-data key for a re-identification result. */
+function resultPrivateDataKey(reqId: string): string {
+  return `reid_result:${reqId}`;
+}
+
+/** Converts Fabric's transaction timestamp to the ISO format stored on ledger. */
+function timestampToIso(ctx: Context): string {
+  const timestamp = ctx.stub.getTxTimestamp();
+  return new Date(Number(timestamp.seconds) * 1000).toISOString();
+}
+
+/** Builds the exact message that EC members must sign for an approval decision. */
 function canonicalApprovalMessage(reqId: string, decision: Decision): string {
   return `reid_approval:${reqId}:${decision}`;
 }
 
+/** Verifies a base64-encoded ECDSA signature against a PEM public key. */
 function verifyEcdsa(publicKeyPem: string, message: string, signatureB64: string): boolean {
   try {
     const v = createVerify('SHA256');
@@ -45,15 +68,16 @@ function verifyEcdsa(publicKeyPem: string, message: string, signatureB64: string
 }
 
 export class StudyReIdentificationContract extends Contract {
+  /** Creates the Fabric contract with its registered contract name. */
   constructor() { super('StudyReIdentificationContract'); }
 
+  /** Confirms that the chaincode is installed and callable. */
   @Transaction(false) @Returns('string')
   public async testChaincode(ctx: Context): Promise<string> {
     return 'StudyReIdentificationContract is working!';
   }
 
-  // -------- committee key registry --------
-
+  /** Registers or replaces the caller's public key for committee signatures. */
   @Transaction()
   public async RegisterCommitteeMember(ctx: Context, publicKeyPem: string): Promise<void> {
     const mspId = ctx.clientIdentity.getMSPID();
@@ -66,8 +90,7 @@ export class StudyReIdentificationContract extends Contract {
       Buffer.from(JSON.stringify({ mspId })));
   }
 
-  // -------- request creation (RO) --------
-
+  /** Creates a pending re-identification request on behalf of the RO organization. */
   @Transaction() @Returns('string')
   public async CreateReIDRequest(
     ctx: Context, studyId: string, datamartId: string, sp: string
@@ -76,25 +99,23 @@ export class StudyReIdentificationContract extends Contract {
     if (!studyId || !datamartId || !sp) throw new Error('studyId/datamartId/sp required');
 
     const reqId = ctx.stub.getTxID();
-    const key = `reid_request:${reqId}`;
+    const key = requestStateKey(reqId);
     const existing = await ctx.stub.getState(key);
     if (existing && existing.length > 0) return reqId;
 
-    const ts = ctx.stub.getTxTimestamp();
     const value: ReIDRequest = {
       reqId, studyId, datamartId, sp,
       status: 'pending',
-      createdAt: new Date(Number(ts.seconds) * 1000).toISOString(),
+      createdAt: timestampToIso(ctx),
     };
     await ctx.stub.putState(key, Buffer.from(JSON.stringify(value)));
     ctx.stub.setEvent('ReIDRequestCreated', Buffer.from(JSON.stringify({ reqId })));
     return reqId;
   }
 
-  // -------- K-of-N signing (EC members) --------
-
+  /** Verifies and records an EC decision, resolving the request when the K-of-N rule is met. */
   @Transaction()
-public async SignReIDRequest(
+  public async SignReIDRequest(
   ctx: Context, reqId: string, decision: string, signatureB64: string
 ): Promise<string> {
   const mspId = ctx.clientIdentity.getMSPID();
@@ -106,7 +127,7 @@ public async SignReIDRequest(
   }
   if (!signatureB64) throw new Error('signatureB64 is required');
 
-  const reqKey = `reid_request:${reqId}`;
+  const reqKey = requestStateKey(reqId);
   const bytes = await ctx.stub.getState(reqKey);
   if (!bytes || bytes.length === 0) throw new Error(`reqId ${reqId} not found`);
   const request = JSON.parse(bytes.toString()) as ReIDRequest;
@@ -125,7 +146,7 @@ public async SignReIDRequest(
     throw new Error(`Signature verification failed for ${mspId}`);
   }
 
-  const approvalKey = `reid_approval:${reqId}:${mspId}`;
+  const approvalKey = approvalStateKey(reqId, mspId);
   const existing = await ctx.stub.getState(approvalKey);
   if (existing && existing.length > 0) {
     const prev = JSON.parse(existing.toString()) as ReIDApproval;
@@ -146,7 +167,7 @@ public async SignReIDRequest(
 
   for (const ec of EC_MSP_IDS) {
     if (ec === mspId) continue;  
-    const b = await ctx.stub.getState(`reid_approval:${reqId}:${ec}`);
+    const b = await ctx.stub.getState(approvalStateKey(reqId, ec));
     if (b && b.length > 0) {
       const a = JSON.parse(b.toString()) as ReIDApproval;
       if (a.decision === 'approve') approveCount++;
@@ -156,9 +177,8 @@ public async SignReIDRequest(
   const totalEC = EC_MSP_IDS.length;
 
   if (approveCount >= K_OF_N_THRESHOLD) {
-    const ts = ctx.stub.getTxTimestamp();
     request.status = 'approved';
-    request.approvedAt = new Date(Number(ts.seconds) * 1000).toISOString();
+    request.approvedAt = timestampToIso(ctx);
     request.approvedBy = `K_OF_N(${approveCount}/${totalEC})`;
     await ctx.stub.putState(reqKey, Buffer.from(JSON.stringify(request)));
     ctx.stub.setEvent('ReIDRequestApproved',
@@ -172,27 +192,28 @@ public async SignReIDRequest(
   return 'Request signed successfully by ' + mspId;
 }
 
+  /** Returns all recorded EC approvals for a re-identification request. */
   @Transaction(false) @Returns('string')
   public async GetReIDApprovals(ctx: Context, reqId: string): Promise<string> {
     const out: ReIDApproval[] = [];
     for (const ec of EC_MSP_IDS) {
-      const b = await ctx.stub.getState(`reid_approval:${reqId}:${ec}`);
+      const b = await ctx.stub.getState(approvalStateKey(reqId, ec));
       if (b && b.length > 0) out.push(JSON.parse(b.toString()));
     }
     return JSON.stringify(out);
   }
 
+  /** Returns the public request record identified by its transaction ID. */
   @Transaction(false) @Returns('string')
   public async GetReIDRequest(ctx: Context, reqId: string): Promise<string> {
-    const b = await ctx.stub.getState(`reid_request:${reqId}`);
+    const b = await ctx.stub.getState(requestStateKey(reqId));
     if (!b || b.length === 0) throw new Error(`reqId ${reqId} not found`);
     return b.toString();
   }
 
-  // -------- PDC result (SPI) --------
-
+  /** Stores the resolved work package in private data after EC approval. */
   @Transaction()
-public async RegisterReIDResult(ctx: Context, reqId: string): Promise<void> {
+  public async RegisterReIDResult(ctx: Context, reqId: string): Promise<void> {
   this.assertCallerIs(ctx, SPI_MSP_ID);
 
   const transient = ctx.stub.getTransient();
@@ -200,19 +221,18 @@ public async RegisterReIDResult(ctx: Context, reqId: string): Promise<void> {
   const wp = Buffer.from(transient.get('wp')!).toString('utf8');
   if (!wp) throw new Error('Transient "wp" must not be empty');
 
-  const reqBytes = await ctx.stub.getState(`reid_request:${reqId}`);
+  const reqBytes = await ctx.stub.getState(requestStateKey(reqId));
   if (!reqBytes || reqBytes.length === 0) throw new Error(`reqId ${reqId} not found`);
   const request = JSON.parse(reqBytes.toString()) as ReIDRequest;
   if (request.status !== 'approved') {
     throw new Error(`reqId ${reqId} is not approved (status=${request.status})`);
   }
 
-  const resultKey = `reid_result:${reqId}`;
+  const resultKey = resultPrivateDataKey(reqId);
   const existing = await ctx.stub.getPrivateData(PDC_COLLECTION, resultKey);
   if (existing && existing.length > 0) return; // idempotente
 
-  const ts = ctx.stub.getTxTimestamp();
-  const resolvedAt = new Date(Number(ts.seconds) * 1000).toISOString();
+  const resolvedAt = timestampToIso(ctx);
   await ctx.stub.putPrivateData(
     PDC_COLLECTION,
     resultKey,
@@ -222,13 +242,15 @@ public async RegisterReIDResult(ctx: Context, reqId: string): Promise<void> {
   ctx.stub.setEvent('ReIDResultRegistered', Buffer.from(JSON.stringify({ reqId })));
 }
 
+  /** Returns the private work package associated with an approved request. */
   @Transaction(false) @Returns('string')
   public async GetReIDResult(ctx: Context, reqId: string): Promise<string> {
-    const b = await ctx.stub.getPrivateData(PDC_COLLECTION, `reid_result:${reqId}`);
+    const b = await ctx.stub.getPrivateData(PDC_COLLECTION, resultPrivateDataKey(reqId));
     if (!b || b.length === 0) throw new Error(`reqId ${reqId} not found`);
     return (JSON.parse(b.toString()) as ReIDResult).wp;
   }
 
+  /** Rejects the transaction unless the caller belongs to the expected organization. */
   private assertCallerIs(ctx: Context, expectedMsp: string): void {
     const mspId = ctx.clientIdentity.getMSPID();
     if (mspId !== expectedMsp) {
