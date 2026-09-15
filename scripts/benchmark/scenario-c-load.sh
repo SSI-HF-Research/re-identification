@@ -1,15 +1,15 @@
 #!/bin/bash
-# Cenario C: teste de carga. Sobe o nivel de concorrencia e mede
-# throughput (tx/s) e latencia por nivel, ate a saturacao.
+# Scenario C: load test. Increases the concurrency level and measures
+# throughput (tx/s) and latency per level until saturation.
 #
-# Metricas cobertas: M2 (throughput maximo), M6 (escalabilidade por
-# concorrencia).
+# Metrics covered: M2 (maximum throughput), M6 (scalability by
+# concurrency).
 #
-# Operacao usada como carga: RegisterIdentityReference (invoke simples,
-# 2 endossantes, escreve em chave unica por chamada — minimiza risco de
-# conflito MVCC para isolar o efeito de concorrencia pura).
+# Operation used as load: RegisterIdentityReference (simple invoke,
+# 2 endorsers, writes to a unique key per call — minimizes the risk of
+# MVCC conflicts to isolate the effect of pure concurrency).
 #
-# Uso:
+# Usage:
 #   LEVELS="1 2 4 8 16 32" OPS_PER_LEVEL=50 ./scenario-c-load.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -35,7 +35,7 @@ one_op() {
 for level in $LEVELS; do
   CSV="$BENCH_DIR/scenario-c_level${level}.csv"
   ensure_csv_header "$CSV"
-  echo ">> Nivel de concorrencia: $level ($OPS_PER_LEVEL operacoes)"
+  echo ">> Concurrency level: $level ($OPS_PER_LEVEL operations)"
 
   t0=$(now_ns)
   i=1
@@ -56,14 +56,14 @@ for level in $LEVELS; do
   tps=$(awk "BEGIN{printf \"%.2f\", $ok_count/$elapsed_s}")
 
   echo "$level,$OPS_PER_LEVEL,$ok_count,$fail_count,$elapsed_s,$tps" >> "$SUMMARY_CSV"
-  echo "   -> ${elapsed_s}s | ok=$ok_count fail=$fail_count | ${tps} tx/s (sucesso)"
+  echo "   -> ${elapsed_s}s | ok=$ok_count fail=$fail_count | ${tps} tx/s (successful)"
 
   if [ "$fail_count" -gt 0 ]; then
-    echo "   ATENCAO: $fail_count falhas neste nivel — checar MVCC_READ_CONFLICT / timeout de endorsement"
+    echo "   WARNING: $fail_count failures at this level — check MVCC_READ_CONFLICT / endorsement timeout"
   fi
 done
 
 echo ""
-echo ">> Resumo de throughput por nivel de concorrencia:"
+echo ">> Throughput summary by concurrency level:"
 column -t -s',' "$SUMMARY_CSV" 2>/dev/null || cat "$SUMMARY_CSV"
-echo ">> Arquivo: $SUMMARY_CSV"
+echo ">> File: $SUMMARY_CSV"

@@ -1,12 +1,12 @@
 #!/bin/bash
-# Cenario A: ingestao de N pacientes no warehouse-channel + montagem de
-# datamarts no study-channel, em lotes de BATCH_SIZE.
+# Scenario A: ingest N patients into the warehouse channel and assemble
+# datamarts on the study channel in batches of BATCH_SIZE.
 #
-# Metricas cobertas: M1 (pseudonimizacao por etapa), M3 (leitura/escrita
-# por PDC, implicito em cada etapa), M5 (parcial), M6 (variando N,
+# Covered metrics: M1 (pseudonymization per stage), M3 (read/write
+# operations per PDC, implicit in each stage), M5 (partial), M6 (varying N,
 # BATCH_SIZE, CONCURRENCY).
 #
-# Uso:
+# Usage:
 #   N_PATIENTS=200 BATCH_SIZE=20 CONCURRENCY=8 ./scenario-a-ingest.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -19,7 +19,7 @@ ensure_csv_header "$CSV"
 STATE_DIR="$(mktemp -d)"
 trap 'rm -rf "$STATE_DIR"' EXIT
 
-echo ">> Cenario A: N=$N_PATIENTS pacientes, lote=$BATCH_SIZE, concorrencia=$CONCURRENCY"
+echo ">> Scenario A: N=$N_PATIENTS patients, batch=$BATCH_SIZE, concurrency=$CONCURRENCY"
 echo ">> CSV: $CSV"
 
 ingest_one_patient() {
@@ -53,14 +53,14 @@ ingest_one_patient() {
   rm -f "$out"
   if [ $rc -ne 0 ]; then return 1; fi
 
-  # append protegido por flock, pois varios ingest_one_patient rodam em paralelo
+  # Protect the append with flock because multiple ingest_one_patient instances run in parallel.
   {
     flock -x 201
     echo -e "${idx}\t${ref}\t${wp}" >> "$STATE_DIR/patients.tsv"
   } 201>>"$STATE_DIR/patients.tsv.lock"
 }
 
-echo ">> [Bloco A] Ingestao de pacientes"
+echo ">> [Block A] Patient ingestion"
 i=1
 while [ "$i" -le "$N_PATIENTS" ]; do
   batch_end=$(( i + CONCURRENCY - 1 ))
@@ -73,10 +73,10 @@ while [ "$i" -le "$N_PATIENTS" ]; do
 done
 
 total_ingested=$(wc -l < "$STATE_DIR/patients.tsv" 2>/dev/null || echo 0)
-echo ">> $total_ingested/$N_PATIENTS pacientes ingeridos com sucesso"
+echo ">> $total_ingested/$N_PATIENTS patients ingested successfully"
 
 echo ""
-echo ">> [Bloco B] Montagem de datamarts (lotes de $BATCH_SIZE)"
+echo ">> [Block B] Datamart assembly (batches of $BATCH_SIZE)"
 
 mapfile -t all_wps < <(cut -f3 "$STATE_DIR/patients.tsv" 2>/dev/null)
 total=${#all_wps[@]}
@@ -110,6 +110,6 @@ while [ "$start" -lt "$total" ]; do
 done
 
 echo ""
-echo ">> Cenario A concluido."
-echo ">> CSV bruto: $CSV"
-echo ">> Rodar: python3 $ROOT/scripts/benchmark/analyze.py $CSV"
+echo ">> Scenario A completed."
+echo ">> Raw CSV: $CSV"
+echo ">> Run: python3 $ROOT/scripts/benchmark/analyze.py $CSV"

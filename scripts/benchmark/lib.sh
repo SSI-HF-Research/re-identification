@@ -1,27 +1,25 @@
 #!/bin/bash
-# lib.sh — instrumentacao de tempo para os benchmarks (Cenarios A/B/C).
+# lib.sh — timing instrumentation for benchmarks (Scenarios A/B/C).
 #
-# Formato do CSV de saida: label,duration_ms,success,timestamp
-#   - duration_ms: tempo de parede (wall-clock) do comando, em milissegundos
-#   - success: 1 (rc=0) ou 0 (rc!=0)
-#   - timestamp: ISO-8601 UTC do fim da chamada
+# Output CSV format: label,duration_ms,success,timestamp
+#   - duration_ms: command wall-clock time, in milliseconds
+#   - success: 1 (rc=0) or 0 (rc!=0)
+#   - timestamp: ISO-8601 UTC time at the end of the call
 #
-# Escrita no CSV e protegida por flock, pois os cenarios rodam chamadas
-# em paralelo (varios processos escrevendo no mesmo arquivo).
+# CSV writes are protected by flock because scenarios run calls in parallel
+# (multiple processes writing to the same file).
 
 now_ns() { date +%s%N; }
 
 ensure_csv_header() {
   local csv="$1"
-  if [ ! -f "$csv" ]; then
-    echo "label,duration_ms,success,timestamp" > "$csv"
-  fi
+  echo "label,duration_ms,success,timestamp" > "$csv"
 }
 
-# time_cmd <csv> <label> <out_file> <comando...>
-# <out_file> recebe stdout+stderr do comando (use /dev/null se nao precisar
-# do retorno; passe um arquivo real se precisar ler o valor depois, ex.
-# uma query que retorna PII/WP/SP).
+# time_cmd <csv> <label> <out_file> <command...>
+# <out_file> receives the command's stdout+stderr (use /dev/null if the output
+# is not needed; pass a real file if the value must be read later, e.g.
+# a query that returns PII/WP/SP).
 time_cmd() {
   local csv="$1" label="$2" out="$3"; shift 3
 
@@ -41,7 +39,7 @@ time_cmd() {
   } 200>>"${csv}.lock"
 
   if [ "$success" -eq 0 ]; then
-    echo "  [ERRO em '$label'] rc=$rc: $(tail -c 500 "$out")" >&2
+    echo "  [ERROR in '$label'] rc=$rc: $(tail -c 500 "$out")" >&2
   fi
 
   return $rc
