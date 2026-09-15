@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""
+analyze.py — le um CSV gerado por lib.sh (label,duration_ms,success,timestamp)
+e imprime estatisticas por label: n, falhas, media, p50, p95, p99, min, max.
+
+Uso:
+    python3 analyze.py <arquivo.csv> [--warmup N]
+
+--warmup N: descarta as N primeiras amostras de CADA label antes de
+calcular as estatisticas (evita que JIT/conexao gRPC fria distorçam o
+resultado). Default: 0.
+"""
+import sys
+import csv
+import statistics as st
+from collections import defaultdict
+
+
+def pct(data, p):
+    data = sorted(data)
+    if not data:
+        return float("nan")
+    k = (len(data) - 1) * p
+    f = int(k)
+    c = min(f + 1, len(data) - 1)
+    if f == c:
+        return data[f]
+    return data[f] + (data[c] - data[f]) * (k - f)
+
+
+def main(path, warmup):
+    rows = defaultdict(list)
+    fails = defaultdict(int)
+
+    with open(path, newline="") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            label = row["label"]
+            success = row["success"] == "1"
+            if success:
+                rows[label].append(float(row["duration_ms"]))
+            else:
+                fails[label] += 1
+
+    if warmup > 0:
+        for label in list(rows.keys()):
+            rows[label] = rows[label][warmup:]
+
+    print(f"Arquivo: {path}  (warmup={warmup})")
+    print(
+        f"{'label':42s} {'n':>5s} {'fail':>5s} {'mean':>9s} "
+        f"{'p50':>9s} {'p95':>9s} {'p99':>9s} {'min':>9s} {'max':>9s}   (ms)"
+    )
+    print("-" * 120)
+
+    for label in sorted(set(rows.keys()) | set(fails.keys())):
+        d = rows.get(label, [])
+        f = fails.get(label, 0)
+        if not d:
+            print(f"{label:42s} {'0':>5s} {f:5d}  (100% de falha, sem amostras validas)")
+            continue
+        print(
+            f"{label:42s} {len(d):5d} {f:5d} "
+            f"{st.mean(d):9.1f} {pct(d,0.50):9.1f} {pct(d,0.95):9.1f} "
+            f"{pct(d,0.99):9.1f} {min(d):9.1f} {max(d):9.1f}"
+        )
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("uso: analyze.py <arquivo.csv> [--warmup N]")
+        sys.exit(1)
+    csv_path = sys.argv[1]
+    warmup_n = 0
+    if "--warmup" in sys.argv:
+        idx = sys.argv.index("--warmup")
+        warmup_n = int(sys.argv[idx + 1])
+    main(csv_path, warmup_n)

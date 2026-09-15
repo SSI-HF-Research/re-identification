@@ -14,6 +14,12 @@ export class StudyMappingContract extends Contract {
     super('StudyMappingContract');
   }
 
+  /** Confirms that the chaincode is installed and callable. */
+  @Transaction(false) @Returns('string')
+  public async testChaincode(ctx: Context): Promise<string> {
+    return 'Study Mapping Contract is working!';
+  }
+
   /** Computes the study pseudonym for a work package using the study key. */
   private computeSp(studyKey: string, wp: string): string {
     return createHmac('sha256', studyKey).update(wp, 'utf8').digest('hex');

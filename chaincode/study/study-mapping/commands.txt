@@ -1,5 +1,5 @@
 ./scripts/network.sh deployCC study-channel study-mapping \
-  ./chaincode/study/study-mapping 1.0 1 \
+  ./chaincode/study/study-mapping 2.0 2 \
   ./chaincode/study/collections_config.json \
   OrgSC OrgSPI OrgMO OrgRO OrgEC1 OrgEC2 OrgEC3
 
