@@ -99,7 +99,7 @@ export class IdentityMappingContract extends Contract {
     return decodedValue;
   }
 
-  /** Ensures that only the identity-management organization can register mappings. */
+  /** Ensures that only an identity manager can register mappings. */
   private assertCallerIsIM(ctx: Context): void {
     const mspId = ctx.clientIdentity.getMSPID();
     if (mspId !== IM_MSP_ID) {

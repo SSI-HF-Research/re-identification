@@ -1,9 +1,18 @@
 #!/bin/bash
 set -euo pipefail
+
+# This script simulates the study-side flow of a re-identification process.
+# It creates a re-identification request, collects approval signatures from
+# authorized entities, resolves the service provider (SP) back to the warehouse
+# pseudonym (WP), stores the final result, and exports the context for the
+# warehouse side.
+
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 source scripts/utils.sh
 
+# Capture the transaction ID returned by a Fabric invoke and save it to a file so
+# the script can reuse it in later steps.
 invoke_capture_txid() {
   local out_file="$1"; shift
   local output rc=0
@@ -29,7 +38,11 @@ DATAMART_ID="${DATAMART_ID:-dm-1}"
 
 WORKDIR="$(mktemp -d)"; trap 'rm -rf "$WORKDIR"' EXIT
 
-# ----- setup paciente + datamart -----
+# ----- Setup synthetic identity + datamart mapping -----
+# Step 0: create a fake patient identifier (PII), generate a reference value,
+# then register the PII -> reference association in the warehouse chain and map
+# that reference to a warehouse pseudonym (WP). The study side then derives the
+# study-specific service provider (SP) mapping for the datamart.
 PII="pii-reid-$(openssl rand -hex 4)"
 REF="ref-$(openssl rand -hex 16)"
 WP=$(node scripts/test/crypto-helper.js wp "$WP_MASTER_KEY" "$PII")
@@ -53,7 +66,10 @@ SP=$(./scripts/queryCC.sh OrgSC study-channel study-mapping \
 
 successln "[setup] REF=$REF WP=$WP SP=$SP"
 
-# ----- [1] RO cria o pedido -----
+# ----- [1] RO creates the request -----
+# The research organization opens a re-identification request for the given
+# study/datamart and generated SP. This request gets a transaction-based ID that
+# is then used throughout the approval workflow.
 TX_FILE="$WORKDIR/txid"
 : > "$TX_FILE"
 
@@ -62,18 +78,20 @@ if ! invoke_capture_txid "$TX_FILE" \
       "{\"function\":\"CreateReIDRequest\",\"Args\":[\"$STUDY_ID\",\"$DATAMART_ID\",\"$SP\"]}" \
       NA \
       OrgRO OrgRO OrgSPI OrgSC OrgEC1 OrgEC2; then
-  errorln "[1] FALHOU: CreateReIDRequest retornou erro"
+  errorln "[1] FAILED: CreateReIDRequest returned an error"
   exit 1
 fi
 
 REQ_ID=$(cat "$TX_FILE" 2>/dev/null || true)
 if [ -z "$REQ_ID" ]; then
-  errorln "[1] FALHOU: txId nao capturado em $TX_FILE"
+  errorln "[1] FAILED: txId was not captured in $TX_FILE"
   exit 1
 fi
 successln "[1] reqId=$REQ_ID"
 
-# ----- [2] EC1 assina approve -----
+# ----- [2] EC1 signs approval -----
+# The first approval can only move the request from 'created' to 'pending' state.
+# It proves that one authorized entity has accepted the re-identification.
 MSG1="reid_approval:${REQ_ID}:approve"
 SIG1=$(node scripts/test/ec-sign.js sign ec1.example.com "$MSG1")
 ./scripts/invokeCC.sh study-channel "$CC_SREID" \
@@ -81,10 +99,12 @@ SIG1=$(node scripts/test/ec-sign.js sign ec1.example.com "$MSG1")
   NA OrgEC1 OrgEC1 OrgEC2 OrgEC3 OrgSPI OrgRO
 STATUS=$(./scripts/queryCC.sh OrgRO study-channel "$CC_SREID" \
   "{\"function\":\"GetReIDRequest\",\"Args\":[\"$REQ_ID\"]}" | jq -r .status)
-[ "$STATUS" == "pending" ] || { errorln "esperado pending, veio $STATUS"; exit 1; }
-successln "[2] 1/2 aprovacoes: status=pending OK"
+[ "$STATUS" == "pending" ] || { errorln "expected pending, got $STATUS"; exit 1; }
+successln "[2] 1/2 approvals: status=pending OK"
 
-# ----- [3] EC2 signs -> K reached -----
+# ----- [3] EC2 signs -> quorum reached -----
+# The second approval is required to reach the final 'approved' state. Once both
+# signatures are present, the request is considered authorized.
 MSG2="reid_approval:${REQ_ID}:approve"
 SIG2=$(node scripts/test/ec-sign.js sign ec2.example.com "$MSG2")
 ./scripts/invokeCC.sh study-channel "$CC_SREID" \
@@ -92,22 +112,29 @@ SIG2=$(node scripts/test/ec-sign.js sign ec2.example.com "$MSG2")
   NA OrgEC2 OrgEC1 OrgEC2 OrgEC3 OrgSPI OrgRO
 STATUS=$(./scripts/queryCC.sh OrgRO study-channel "$CC_SREID" \
   "{\"function\":\"GetReIDRequest\",\"Args\":[\"$REQ_ID\"]}" | jq -r .status)
-[ "$STATUS" == "approved" ] || { errorln "esperado approved, veio $STATUS"; exit 1; }
-successln "[3] 2/2 aprovacoes: status=approved OK"
+[ "$STATUS" == "approved" ] || { errorln "expected approved, got $STATUS"; exit 1; }
+successln "[3] 2/2 approvals: status=approved OK"
 
-# ----- [4] SPI resolve SP -> WP -----
+# ----- [4] SPI resolves SP -> WP -----
+# This lookup verifies the governance mapping: the service provider generated for
+# the study must resolve back to the same warehouse pseudonym (WP) used during
+# registration.
 WP_FROM_SP=$(./scripts/queryCC.sh OrgSPI study-channel study-mapping \
   "{\"function\":\"GetWPBySP\",\"Args\":[\"$SP\"]}")
-[ "$WP_FROM_SP" == "$WP" ] || { errorln "WP divergente"; exit 1; }
+[ "$WP_FROM_SP" == "$WP" ] || { errorln "WP mismatch"; exit 1; }
 successln "[4] SP -> WP OK"
 
-# ----- [5] SPI grava WP na PDC -----
+# ----- [5] SPI stores the WP in the result record -----
+# The data owner stores the final pseudonym result in the study re-identification
+# chain so the warehouse side can later retrieve and match the request.
 ./scripts/invokeCC.sh study-channel "$CC_SREID" \
   "{\"function\":\"RegisterReIDResult\",\"Args\":[\"$REQ_ID\"]}" \
   "{\"wp\":\"$WP_FROM_SP\"}" OrgSPI OrgSPI OrgRO
 successln "[5] RegisterReIDResult OK"
 
-# ----- [6] Export context for warehouse side -----
+# ----- [6] Export context for the warehouse side -----
+# Save the approval evidence and metadata needed by the warehouse flow to
+# continue with the downstream re-identification processing.
 ./scripts/queryCC.sh OrgRO study-channel "$CC_SREID" \
   "{\"function\":\"GetReIDApprovals\",\"Args\":[\"$REQ_ID\"]}" > "$WORKDIR/approvals.json"
 
@@ -121,4 +148,4 @@ if [ -n "${STUDY_OUT_FILE:-}" ]; then
     printf "APPROVALS_JSON=%q\n" "$(cat "$WORKDIR/approvals.json")"
   } > "$STUDY_OUT_FILE"
 fi
-successln "Lado study: OK."
+successln "Study side: OK."

@@ -9,13 +9,13 @@
 # 2 endorsers, writes to a unique key per call — minimizes the risk of
 # MVCC conflicts to isolate the effect of pure concurrency).
 #
-# Usage:
-#   LEVELS="1 2 4 8 16 32" OPS_PER_LEVEL=50 ./scenario-c-load.sh
+
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 source "$ROOT/scripts/benchmark/config.sh"
 source "$ROOT/scripts/benchmark/lib.sh"
 
+LEVELS="1 2 4 8 16 32 64" OPS_PER_LEVEL=400
 SUMMARY_CSV="$BENCH_DIR/scenario-c-throughput-summary.csv"
 echo "concurrency,ops_attempted,ops_ok,ops_failed,elapsed_s,throughput_tps_ok" > "$SUMMARY_CSV"
 

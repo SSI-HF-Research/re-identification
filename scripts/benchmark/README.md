@@ -1,88 +1,89 @@
-# Benchmarks — Cenários A, B, C
+# Benchmarks — Scenarios A, B, C
 
-## Pré-requisitos
-- Rede já no ar, todos os chaincodes deployados e o comitê (EC1/EC2/EC3)
-  já registrado via `setup-committee.sh`
-- `flock`, `openssl`, `node`, `python3`, `jq`, `awk`, GNU `date` (suporta `+%s%N`)
-- Scripts colocados em `scripts/bench/` dentro do seu projeto, ao lado de
-  `invokeCC.sh`, `queryCC.sh`, `utils.sh`, `envvar.sh` e da pasta `scripts/test/`
-  (`crypto-helper.js`, `ec-sign.js`)
+This benchmark suite measures the cost of the main operations in the privacy-preserving re-identification workflow on Hyperledger Fabric. The goal is to quantify how long each pipeline stage takes, how it scales with workload and concurrency, and which part of the process dominates the end-to-end latency.
 
-## Premissas assumidas (confirmar/ajustar antes de rodar)
-1. **Nomes de chaincode** em `00-config.sh` — kebab-case, copiados do seu
-   `reid-study.sh` (`identity-mapping`, `warehouse-mapping`, `study-mapping`,
-   `study-reidentification`, `warehouse-reidentification`). Ajuste se
-   divergir do que está de fato commitado.
-2. **`CAPTURE_TXID_FILE`** — o Cenário B depende desse mecanismo em
-   `invokeCC.sh` pra capturar o `reqId` retornado por `CreateReIDRequest`
-   (que usa `ctx.stub.getTxID()`), exatamente como já é feito em
-   `reid-study.sh` / `invoke_capture_txid`. Se o mecanismo real for
-   diferente, ajustar a extração de `req_id` em `scenario-b-reid.sh`.
-3. Datamarts/estudos usados nos benchmarks são fictícios
-   (`bench-study`, `bench-dm-N`) — não colidem com dados reais, mas rodar
-   num ambiente de teste, não em produção.
+The scripts generate CSV files under `bench-results/` with the format:
+`label,duration_ms,success,timestamp`
 
-## Cenários
+These measurements are intended to support the evaluation section of the article.
 
-| Script | O que mede | Parâmetros principais |
-|---|---|---|
-| `scenario-a-ingest.sh` | M1, M3, M5 (parcial), M6 | `N_PATIENTS`, `BATCH_SIZE`, `CONCURRENCY` |
-| `scenario-b-reid.sh` | M4, M5 (parcial), M6 | `REPEAT`, `CONCURRENCY_REID` |
-| `scenario-c-load.sh` | M2, M6 | `LEVELS`, `OPS_PER_LEVEL` |
+## Prerequisites
+- Network already running; all chaincodes deployed and the committee (EC1/EC2/EC3)
+  already registered via `setup-committee.sh`
+- `flock`, `openssl`, `node`, `python3`, `jq`, `awk`, GNU `date` (supports `+%s%N`)
+- Scripts placed in `scripts/bench/` inside your project, alongside
+  `invokeCC.sh`, `queryCC.sh`, `utils.sh`, `envvar.sh`, and the `scripts/test/`
+  folder (`crypto-helper.js`, `ec-sign.js`)
 
-Rodar individualmente:
-```bash
-N_PATIENTS=100 BATCH_SIZE=20 CONCURRENCY=8 ./scripts/bench/scenario-a-ingest.sh
-REPEAT=30 CONCURRENCY_REID=1 ./scripts/bench/scenario-b-reid.sh
-LEVELS="1 2 4 8 16" OPS_PER_LEVEL=50 ./scripts/bench/scenario-c-load.sh
-```
 
-Ou tudo de uma vez (com os defaults de `00-config.sh`):
-```bash
-./scripts/bench/run-all.sh
-```
+## What is being done
+Each scenario exercises a specific part of the workflow and records duration in milliseconds for each operation. The main idea is to isolate the cost of each stage rather than measuring only an aggregate end-to-end time. The scripts:
 
-## Analisando os resultados
+- prepare synthetic datasets and identities
+- submit transactions to Fabric chaincodes under controlled concurrency
+- capture successful and failed operations
+- write one or more CSV files with labeled measurement samples
+- allow benchmarking of different workload sizes and parallelism levels
 
-Cada cenário grava um ou mais CSVs em `bench-results/` no formato
-`label,duration_ms,success,timestamp`. Para agregar em estatísticas:
+This makes it possible to compare the cost of ingestion, re-identification, reading/writing across channels, and overall scalability.
 
-```bash
-python3 scripts/bench/analyze.py bench-results/scenario-a_N100_batch20_conc8.csv --warmup 5
-```
+## Scenarios
 
-`--warmup N` descarta as N primeiras amostras de cada label antes de
-calcular média/percentis — recomendado usar N=5 a 10 pra amortecer o
-efeito de conexão gRPC fria / JIT do Node no início da execução.
+| Script | Goal | Metric(s) measured | Main parameters |
+|---|---|---|---|
+| `scenario-a-ingest.sh` | Measure pseudo-anonymization and channel-level data writing operations; evaluate how the ingestion pipeline behaves under different patient counts and batch sizes | `N_PATIENTS`, `BATCH_SIZE`, `CONCURRENCY` |
+| `scenario-b-reid.sh` | Measure the re-identification process, including request creation and follow-up operations; evaluate latency and concurrency impact | `REPEAT`, `CONCURRENCY_REID` |
+| `scenario-c-load.sh` | Measure the transaction latency and throughput under multi-level load; evaluate how the system scales with parallel demand | `LEVELS`, `OPS_PER_LEVEL` |
 
-**Recomendações metodológicas:**
-- Rodar cada configuração pelo menos ~30 vezes (ajustar `REPEAT`/`OPS_PER_LEVEL`)
-  antes de reportar percentis com confiança
-- Mudar uma variável por vez (N, tamanho de lote, concorrência) — não
-  combinar mudanças na mesma rodada, senão não dá pra atribuir causa ao efeito
-- Reportar p50/p95/p99, não só a média — a cauda longa é o que geralmente
-  importa em sistemas distribuídos
-- Ambiente controlado: mesma máquina, nada mais competindo por CPU durante
-  a medição, documentar a spec de hardware no artigo
+### Scenario A — ingestion / pseudo-anonymization
+Goal: quantify how long it takes to process patient data and write the relevant records to the appropriate channels/PDCs. This is the part that corresponds to pseudo-anonymization and downstream data organization.
 
-## Mapeamento pra Seção 7 do artigo
+Metrics:
+- time to pseudo-anonymize or transform each data level
+- time spent reading/writing on each channel or PDC
+- part of the protection/re-identification flow that executes as part of ingestion
+- scalability as load, concurrency, and batch size change
 
-| Placeholder no LaTeX | Métrica | Fonte |
-|---|---|---|
-| `pseudoanonymization time for each level` | M1 | `scenario-a_*.csv`, labels A1-A4 |
-| `total time for re-identification process` | M4 | `scenario-b_*.csv`, labels B1-B9 e `B_TOTAL_reid_process` |
-| `transaction latency, max throughput` | M2 | `scenario-c-throughput-summary.csv` |
-| `total time for identity-wp-sp-reid` | M4+M5 | soma de A (até WP/SP) + `B_TOTAL_reid_process` |
-| `reading/writing on each channel, each pdc (time)` | M3 | implícito em cada label — cada um já é uma leitura/escrita isolada de uma PDC específica |
-| `how scalable — multiple processes running` | M6 | variar `N_PATIENTS`/`BATCH_SIZE`/`CONCURRENCY` (Cenário A) e `LEVELS` (Cenário C) |
+### Scenario B — re-identification workflow
+Goal: quantify the total time spent in re-identification operations, including request creation and the chaincode logic that links identities to the corresponding data. This is the core privacy-sensitive workflow in the study.
 
-## O que NÃO está coberto aqui (fora de escopo destes scripts)
+Metrics:
+- total time for the re-identification process
+- additional steps in the identity/privacy pipeline
+- scalability under repeated re-identification attempts and concurrent workers
 
-- Métricas de infraestrutura (CPU/memória dos peers/orderer sob carga) —
-  usar `docker stats` durante o Cenário C, ou habilitar
-  `CORE_METRICS_PROVIDER=prometheus` no `docker-compose.yaml` pra métricas
-  nativas do Fabric (endorsement duration, block cut time etc.), que
-  complementam mas não substituem os CSVs acima
-- Testes de carga formais via Hyperledger Caliper — os scripts aqui
-  cobrem o suficiente pro escopo da dissertação; Caliper só valeria a
-  pena se quiser citar throughput com uma ferramenta padrão da literatura
+### Scenario C — throughput/load test
+Goal: evaluate transaction latency and maximum throughput under increasing load, representing the workload that the network must sustain during normal operation.
+
+Metrics:
+- transaction latency and maximum throughput
+- scaling behavior across increasing levels of parallelism and requests per level
+
+## Analyzing the results
+
+Each scenario writes one or more CSV files in `bench-results/` with the format:
+`label,duration_ms,success,timestamp`.
+
+`--warmup N` removes the first `N` samples of each label before computing means and percentiles. This is useful to reduce the impact of cold gRPC connections and Node JIT warm-up at the beginning of execution. A value between 5 and 10 is usually a good starting point.
+
+## Methodological recommendations
+- Run each configuration at least ~30 times (adjust `REPEAT`/`OPS_PER_LEVEL`) before reporting percentiles with confidence
+- Change only one variable at a time (N, batch size, concurrency) — do not combine multiple modifications in the same run, otherwise you cannot infer cause and effect
+- Report p50, p95, and p99, not just the average — the long tail often matters more in distributed systems
+- Keep the environment controlled: use the same machine, avoid competing CPU load during measurement, and document hardware specs in the article
+
+
+## Summary of the benchmark goals
+
+The benchmark suite is designed to answer four main questions:
+
+1. How much time does each stage of the workflow take?
+2. Which stage dominates the end-to-end processing delay?
+3. How does the system behave under different workloads and concurrency levels?
+4. Does the solution scale acceptably for the expected operational load?
+
+Depending on the section of the article, the CSV outputs can be used to report:
+- average and percentile latency
+- throughput under increasing load
+- bottlenecks in ingestion vs. re-identification
+- scalability trends as concurrency or data volume increases

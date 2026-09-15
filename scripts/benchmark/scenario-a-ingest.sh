@@ -6,13 +6,13 @@
 # operations per PDC, implicit in each stage), M5 (partial), M6 (varying N,
 # BATCH_SIZE, CONCURRENCY).
 #
-# Usage:
-#   N_PATIENTS=200 BATCH_SIZE=20 CONCURRENCY=8 ./scenario-a-ingest.sh
+
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 source "$ROOT/scripts/benchmark/config.sh"
 source "$ROOT/scripts/benchmark/lib.sh"
 
+N_PATIENTS=5000 BATCH_SIZE=500 CONCURRENCY=8
 CSV="$BENCH_DIR/scenario-a_N${N_PATIENTS}_batch${BATCH_SIZE}_conc${CONCURRENCY}.csv"
 ensure_csv_header "$CSV"
 
