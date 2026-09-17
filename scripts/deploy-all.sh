@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-MAX_PARALLEL="${MAX_PARALLEL:-1}"
+MAX_PARALLEL="${MAX_PARALLEL:-3}"
 LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fabric-deploy-all.XXXXXX")"
 cleanup() {
   local status=$?

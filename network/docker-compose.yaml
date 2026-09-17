@@ -70,7 +70,7 @@ services:
       - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
       - CORE_PEER_CHAINCODEADDRESS=peer0.im.example.com:7052
       - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.im.example.com:7051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ec1.example.com:7051
       - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.im.example.com:7051
       - CORE_PEER_LOCALMSPID=OrgIMMSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
@@ -103,7 +103,7 @@ services:
       - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
       - CORE_PEER_CHAINCODEADDRESS=peer0.wpi.example.com:7052
       - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.wpi.example.com:7051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ec1.example.com:7051
       - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.wpi.example.com:7051
       - CORE_PEER_LOCALMSPID=OrgWPIMSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
@@ -136,7 +136,7 @@ services:
       - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
       - CORE_PEER_CHAINCODEADDRESS=peer0.hdw.example.com:7052
       - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.hdw.example.com:7051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ec1.example.com:7051
       - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.hdw.example.com:7051
       - CORE_PEER_LOCALMSPID=OrgHDWMSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
@@ -169,7 +169,7 @@ services:
       - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
       - CORE_PEER_CHAINCODEADDRESS=peer0.sc.example.com:7052
       - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.sc.example.com:7051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ec1.example.com:7051
       - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.sc.example.com:7051
       - CORE_PEER_LOCALMSPID=OrgSCMSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
@@ -202,7 +202,7 @@ services:
       - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
       - CORE_PEER_CHAINCODEADDRESS=peer0.spi.example.com:7052
       - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.spi.example.com:7051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ec1.example.com:7051
       - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.spi.example.com:7051
       - CORE_PEER_LOCALMSPID=OrgSPIMSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
@@ -235,7 +235,7 @@ services:
       - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
       - CORE_PEER_CHAINCODEADDRESS=peer0.ro.example.com:7052
       - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ro.example.com:7051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ec1.example.com:7051
       - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.ro.example.com:7051
       - CORE_PEER_LOCALMSPID=OrgROMSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
@@ -268,7 +268,7 @@ services:
       - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
       - CORE_PEER_CHAINCODEADDRESS=peer0.mo.example.com:7052
       - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.mo.example.com:7051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ec1.example.com:7051
       - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.mo.example.com:7051
       - CORE_PEER_LOCALMSPID=OrgMOMSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
@@ -334,7 +334,7 @@ services:
       - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
       - CORE_PEER_CHAINCODEADDRESS=peer0.ec2.example.com:7052
       - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ec2.example.com:7051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ec1.example.com:7051
       - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.ec2.example.com:7051
       - CORE_PEER_LOCALMSPID=OrgEC2MSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp
@@ -367,7 +367,7 @@ services:
       - CORE_PEER_LISTENADDRESS=0.0.0.0:7051
       - CORE_PEER_CHAINCODEADDRESS=peer0.ec3.example.com:7052
       - CORE_PEER_CHAINCODELISTENADDRESS=0.0.0.0:7052
-      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ec3.example.com:7051
+      - CORE_PEER_GOSSIP_BOOTSTRAP=peer0.ec1.example.com:7051
       - CORE_PEER_GOSSIP_EXTERNALENDPOINT=peer0.ec3.example.com:7051
       - CORE_PEER_LOCALMSPID=OrgEC3MSP
       - CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp

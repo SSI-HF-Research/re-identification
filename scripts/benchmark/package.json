@@ -1,0 +1,17 @@
+{
+  "name": "benchmark",
+  "version": "1.0.0",
+  "description": "This benchmark suite measures the cost of the main operations in the privacy-preserving re-identification workflow on Hyperledger Fabric. The goal is to quantify how long each pipeline stage takes, how it scales with workload and concurrency, and which part of the process dominates the end-to-end latency.",
+  "main": "gateway-baseline.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.4",
+    "@hyperledger/fabric-gateway": "^1.12.1"
+  }
+}

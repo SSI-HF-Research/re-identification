@@ -19,6 +19,9 @@ Organizations:
     Name: OrgIMMSP
     ID: OrgIMMSP
     MSPDir: crypto-config/peerOrganizations/im.example.com/msp
+    AnchorPeers:
+      - Host: peer0.im.example.com
+        Port: 7051
     Policies:
       Readers:
         Type: Signature
@@ -37,6 +40,9 @@ Organizations:
     Name: OrgWPIMSP
     ID: OrgWPIMSP
     MSPDir: crypto-config/peerOrganizations/wpi.example.com/msp
+    AnchorPeers:
+      - Host: peer0.wpi.example.com
+        Port: 7051
     Policies:
       Readers:
         Type: Signature
@@ -55,6 +61,9 @@ Organizations:
     Name: OrgHDWMSP
     ID: OrgHDWMSP
     MSPDir: crypto-config/peerOrganizations/hdw.example.com/msp
+    AnchorPeers:
+      - Host: peer0.hdw.example.com
+        Port: 7051
     Policies:
       Readers:
         Type: Signature
@@ -73,6 +82,9 @@ Organizations:
     Name: OrgSCMSP
     ID: OrgSCMSP
     MSPDir: crypto-config/peerOrganizations/sc.example.com/msp
+    AnchorPeers:
+      - Host: peer0.sc.example.com
+        Port: 7051
     Policies:
       Readers:
         Type: Signature
@@ -91,6 +103,9 @@ Organizations:
     Name: OrgSPIMSP
     ID: OrgSPIMSP
     MSPDir: crypto-config/peerOrganizations/spi.example.com/msp
+    AnchorPeers:
+      - Host: peer0.spi.example.com
+        Port: 7051
     Policies:
       Readers:
         Type: Signature
@@ -109,6 +124,9 @@ Organizations:
     Name: OrgMOMSP
     ID: OrgMOMSP
     MSPDir: crypto-config/peerOrganizations/mo.example.com/msp
+    AnchorPeers:
+      - Host: peer0.mo.example.com
+        Port: 7051
     Policies:
       Readers:
         Type: Signature
@@ -127,6 +145,9 @@ Organizations:
     Name: OrgROMSP
     ID: OrgROMSP
     MSPDir: crypto-config/peerOrganizations/ro.example.com/msp
+    AnchorPeers:
+      - Host: peer0.ro.example.com
+        Port: 7051
     Policies:
       Readers:
         Type: Signature
@@ -145,6 +166,9 @@ Organizations:
     Name: OrgEC1MSP
     ID: OrgEC1MSP
     MSPDir: crypto-config/peerOrganizations/ec1.example.com/msp
+    AnchorPeers:
+      - Host: peer0.ec1.example.com
+        Port: 7051
     Policies:
       Readers:
         Type: Signature
@@ -163,6 +187,9 @@ Organizations:
     Name: OrgEC2MSP
     ID: OrgEC2MSP
     MSPDir: crypto-config/peerOrganizations/ec2.example.com/msp
+    AnchorPeers:
+      - Host: peer0.ec2.example.com
+        Port: 7051
     Policies:
       Readers:
         Type: Signature
@@ -181,6 +208,9 @@ Organizations:
     Name: OrgEC3MSP
     ID: OrgEC3MSP
     MSPDir: crypto-config/peerOrganizations/ec3.example.com/msp
+    AnchorPeers:
+      - Host: peer0.ec3.example.com
+        Port: 7051
     Policies:
       Readers:
         Type: Signature

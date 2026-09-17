@@ -1,18 +1,16 @@
 #!/bin/bash
-# Scenario A: ingest N patients into the warehouse channel and assemble
-# datamarts on the study channel in batches of BATCH_SIZE.
-#
-# Covered metrics: M1 (pseudonymization per stage), M3 (read/write
-# operations per PDC, implicit in each stage), M5 (partial), M6 (varying N,
-# BATCH_SIZE, CONCURRENCY).
-#
+# Scenario A — patient ingestion + datamart assembly.
+# Env: N_PATIENTS, BATCH_SIZE, CONCURRENCY
 
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 source "$ROOT/scripts/benchmark/config.sh"
 source "$ROOT/scripts/benchmark/lib.sh"
 
-N_PATIENTS=5000 BATCH_SIZE=500 CONCURRENCY=8
+N_PATIENTS="${N_PATIENTS:-1000}"
+BATCH_SIZE="${BATCH_SIZE:-50}"
+CONCURRENCY="${CONCURRENCY:-8}"
+
 CSV="$BENCH_DIR/scenario-a_N${N_PATIENTS}_batch${BATCH_SIZE}_conc${CONCURRENCY}.csv"
 ensure_csv_header "$CSV"
 
@@ -22,10 +20,15 @@ trap 'rm -rf "$STATE_DIR"' EXIT
 echo ">> Scenario A: N=$N_PATIENTS patients, batch=$BATCH_SIZE, concurrency=$CONCURRENCY"
 echo ">> CSV: $CSV"
 
+warmup_all
+
+# ---------------------------------------------------------------------------
+# One patient: ref + get_pii + WP + register_wp
+# ---------------------------------------------------------------------------
 ingest_one_patient() {
   local idx="$1"
-  local pii="benchmark-pii-${idx}-$(date +%s%N)"
-  local ref="benchmark-ref-${idx}-$(openssl rand -hex 8)"
+  local pii="bench-pii-${idx}-$(date +%s%N)"
+  local ref="bench-ref-${idx}-$(openssl rand -hex 8)"
   local out; out="$(mktemp)"
 
   time_cmd "$CSV" "A1_register_identity" "$out" \
@@ -53,28 +56,33 @@ ingest_one_patient() {
   rm -f "$out"
   if [ $rc -ne 0 ]; then return 1; fi
 
-  # Protect the append with flock because multiple ingest_one_patient instances run in parallel.
   {
     flock -x 201
-    echo -e "${idx}\t${ref}\t${wp}" >> "$STATE_DIR/patients.tsv"
+    printf '%s\t%s\t%s\n' "$idx" "$ref" "$wp" >> "$STATE_DIR/patients.tsv"
   } 201>>"$STATE_DIR/patients.tsv.lock"
 }
 
+# ---------------------------------------------------------------------------
+# Block A — patients
+# ---------------------------------------------------------------------------
 echo ">> [Block A] Patient ingestion"
 i=1
+total_failed=0
 while [ "$i" -le "$N_PATIENTS" ]; do
   batch_end=$(( i + CONCURRENCY - 1 ))
   [ "$batch_end" -gt "$N_PATIENTS" ] && batch_end=$N_PATIENTS
-  for ((j=i; j<=batch_end; j++)); do
-    ingest_one_patient "$j" &
-  done
-  wait
+  if ! run_parallel ingest_one_patient "$i" "$batch_end"; then
+    total_failed=$(( total_failed + $? ))
+  fi
   i=$(( batch_end + 1 ))
 done
 
 total_ingested=$(wc -l < "$STATE_DIR/patients.tsv" 2>/dev/null || echo 0)
-echo ">> $total_ingested/$N_PATIENTS patients ingested successfully"
+echo ">> $total_ingested/$N_PATIENTS patients ingested successfully (failures=$total_failed)"
 
+# ---------------------------------------------------------------------------
+# Block B — datamarts
+# ---------------------------------------------------------------------------
 echo ""
 echo ">> [Block B] Datamart assembly (batches of $BATCH_SIZE)"
 
@@ -86,7 +94,8 @@ while [ "$start" -lt "$total" ]; do
   end=$(( start + BATCH_SIZE ))
   [ "$end" -gt "$total" ] && end=$total
   dm_idx=$(( dm_idx + 1 ))
-  datamart_id="benchmark-dm-${dm_idx}"
+  datamart_id="bench-dm-${dm_idx}"
+  size=$(( end - start ))
 
   wp_list_json="["
   first=true
@@ -99,7 +108,7 @@ while [ "$start" -lt "$total" ]; do
   study_key="$(node "$ROOT/scripts/test/crypto-helper.js" hkdf "$SP_MASTER_KEY" "$STUDY_ID" "$datamart_id")"
 
   out="$(mktemp)"
-  time_cmd "$CSV" "A4_register_sp_batch_size$(( end - start ))" "$out" \
+  time_cmd "$CSV" "A4_register_sp_batch_size${size}" "$out" \
     "$ROOT/scripts/invokeCC.sh" "$CHANNEL_STUDY" "$CC_STUDY" \
     "{\"function\":\"RegisterSPBatch\",\"Args\":[\"$datamart_id\"]}" \
     "{\"studyKey\":\"$study_key\",\"wpList\":$wp_list_json}" \
@@ -112,4 +121,4 @@ done
 echo ""
 echo ">> Scenario A completed."
 echo ">> Raw CSV: $CSV"
-echo ">> Run: python3 $ROOT/scripts/benchmark/analyze.py $CSV"
+echo ">> Run: python3 $ROOT/scripts/benchmark/analyze.py $CSV --warmup 5"
