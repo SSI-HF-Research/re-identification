@@ -8,9 +8,22 @@ const EC_MSP_IDS = ['OrgEC1MSP', 'OrgEC2MSP', 'OrgEC3MSP'];
 const K_OF_N_THRESHOLD = 2;
 const REID_KEY_PREFIX = 'reid:';
 const EC_KEY_PREFIX = 'ec_key:';
+const RO_MSP_ID  = 'OrgROMSP';
 
 interface ReIDEntry { reqId: string; pii: string; registeredAt: string; }
 interface ReIDApproval { mspId: string; decision: 'approve' | 'reject'; signature: string; }
+interface WarehouseReIDRequest {
+  reqId: string;
+  wp: string;
+  spiSignature: string;
+  approvals: ReIDApproval[];
+  status: 'pending' | 'completed';
+  createdAt: string;
+}
+
+function warehouseRequestKey(reqId: string): string {
+  return `reid_req:${reqId}`;
+}
 
 /** Verifies an ECDSA signature over a UTF-8 message using a PEM public key. */
 function verifyEcdsa(publicKeyPem: string, message: string, signatureB64: string): boolean {
@@ -32,6 +45,13 @@ export class WarehouseReIdentificationContract extends Contract {
     return 'WarehouseReIdentificationContract is working!';
   }
 
+  /** Registers the public key of the SPI. */
+  @Transaction()
+  public async RegisterSPIPublicKey(ctx: Context, publicKeyPem: string): Promise<void> {
+    if (!publicKeyPem) throw new Error('publicKeyPem is required');
+    await ctx.stub.putState(`spi_key:${SPI_MSP_ID}`, Buffer.from(publicKeyPem));
+    ctx.stub.setEvent('SPIPublicKeyRegistered', Buffer.from(JSON.stringify({ mspId: SPI_MSP_ID })));
+  }
   /**
    * Registers or replaces the public key for an authorized EC committee member.
    *
@@ -52,7 +72,40 @@ export class WarehouseReIdentificationContract extends Contract {
     ctx.stub.setEvent('CommitteeMemberRegistered',
       Buffer.from(JSON.stringify({ mspId })));
   }
+  
+  /**
+   * Creates a new warehouse re-identification request.
+   *
+   * @param ctx Fabric transaction context and caller identity
+   * @param reqId re-identification request identifier
+   * @returns the request identifier
+   * @throws when the caller is not the RO or the request is invalid
+   */
+  @Transaction() @Returns('string')
+  public async CreateWarehouseReIDRequest(ctx: Context, reqId: string): Promise<string> {
+    this.assertCallerIs(ctx, RO_MSP_ID);
+    if (!reqId) throw new Error('reqId is required');
 
+    const transient = ctx.stub.getTransient();
+    const wp           = this.getRequiredTransientValue(transient, 'wp');
+    const spiSignature = this.getRequiredTransientValue(transient, 'spiSignature');
+    const approvals    = this.parseApprovals(
+      this.getRequiredTransientValue(transient, 'approvals')
+    );
+
+    const key = warehouseRequestKey(reqId);
+    const existing = await ctx.stub.getState(key);
+    if (existing && existing.length > 0) return reqId; // idempotente
+
+    const request: WarehouseReIDRequest = {
+      reqId, wp, spiSignature, approvals,
+      status: 'pending',
+      createdAt: new Date(Number(ctx.stub.getTxTimestamp().seconds) * 1000).toISOString(),
+    };
+    await ctx.stub.putState(key, Buffer.from(JSON.stringify(request)));
+    ctx.stub.setEvent('WarehouseReIDRequestCreated', Buffer.from(JSON.stringify({ reqId })));
+    return reqId;
+  }
   /**
    * Stores re-identified PII in private data after validating K-of-N EC approvals.
    *
@@ -69,30 +122,39 @@ export class WarehouseReIdentificationContract extends Contract {
     this.assertCallerIs(ctx, WPI_MSP_ID);
     if (!reqId) throw new Error('reqId is required');
 
-    const transient = ctx.stub.getTransient();
-    const pii = this.getRequiredTransientValue(transient, 'pii');
-    const approvals = this.parseApprovals(
-      this.getRequiredTransientValue(transient, 'approvals')
-    );
+    const reqBytes = await ctx.stub.getState(warehouseRequestKey(reqId));
+    if (!reqBytes || reqBytes.length === 0) throw new Error(`reqId ${reqId} not found`);
+    const request = JSON.parse(reqBytes.toString()) as WarehouseReIDRequest;
 
-    const approveCount = await this.verifyApprovals(ctx, reqId, approvals);
+    const pii = this.getRequiredTransientValue(ctx.stub.getTransient(), 'pii');
+
+    const approveCount = await this.verifyApprovals(ctx, reqId, request.approvals);
     if (approveCount < K_OF_N_THRESHOLD) {
-      throw new Error(`Insufficient valid approvals (got ${approveCount}, need ${K_OF_N_THRESHOLD})`);
+      throw new Error(`Insufficient valid EC approvals (got ${approveCount}, need ${K_OF_N_THRESHOLD})`);
+    }
+
+    const spiKeyBytes = await ctx.stub.getState(`spi_key:${SPI_MSP_ID}`);
+    if (!spiKeyBytes || spiKeyBytes.length === 0) {
+      throw new Error('SPI public key is not registered on the Warehouse Channel');
+    }
+    const spiMessage = `spi_resolution:${reqId}:${request.wp}`;
+    if (!verifyEcdsa(spiKeyBytes.toString(), spiMessage, request.spiSignature)) {
+      throw new Error('Invalid SPI attestation');
     }
 
     const key = this.getReIdKey(reqId);
     const existing = await this.getPrivateData<ReIDEntry>(ctx, key);
-    if (existing) {
-      return `reqId ${reqId} already registered, skipping.`;
-    }
+    if (existing) return `reqId ${reqId} already registered, skipping.`;
 
     const ts = ctx.stub.getTxTimestamp();
     const entry: ReIDEntry = {
       reqId, pii,
       registeredAt: new Date(Number(ts.seconds) * 1000).toISOString(),
     };
-    await ctx.stub.putPrivateData(PDC_COLLECTION, key,
-      Buffer.from(JSON.stringify(entry)));
+    await ctx.stub.putPrivateData(PDC_COLLECTION, key, Buffer.from(JSON.stringify(entry)));
+
+    request.status = 'completed';
+    await ctx.stub.putState(warehouseRequestKey(reqId), Buffer.from(JSON.stringify(request)));
 
     ctx.stub.setEvent('WarehouseReIDRegistered',
       Buffer.from(JSON.stringify({ reqId, approveCount })));

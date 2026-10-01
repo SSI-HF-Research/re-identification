@@ -4,9 +4,14 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 source scripts/utils.sh
 
-# This script validates the warehouse-side part of the re-identification flow:
-# it resolves the pseudonym back to the original reference, retrieves the PII,
-# verifies the K-of-N approval policy, and rejects invalid or tampered approval sets.
+# Warehouse-side validation:
+# [0] RO creates the request with wp + SPI attestation + EC approvals
+# [1] WPI resolves WP -> identity_reference
+# [2] WPI resolves identity_reference -> PII
+# [3] WPI invokes RegisterReIdentifiedPII: chaincode verifies EC quorum and SPI attestation, writes PII
+# [4] MO reads the PII back
+# then negative checks.
+
 CHANNEL_WAREHOUSE="${CHANNEL_WAREHOUSE:-warehouse-channel}"
 CC_IDENTITY="${CC_IDENTITY:-identity-mapping}"
 CC_WAREHOUSE="${CC_WAREHOUSE:-warehouse-mapping}"
@@ -14,71 +19,113 @@ CC_WREID="${CC_WREID:-warehouse-reidentification}"
 
 : "${REQ_ID:?REQ_ID required}"
 : "${WP:?WP required}"
+: "${SPI_SIGNATURE:?SPI_SIGNATURE required}"
 : "${APPROVALS_JSON:?APPROVALS_JSON required}"
 
-# ----- [1] WPI resolves the warehouse pseudonym (WP) back to an identity reference -----
-# This step proves the warehouse-side mapping can be reversed to the original
-# patient reference before the final re-identification is processed.
+APPROVALS_MIN=$(echo "$APPROVALS_JSON" | jq -c .)
+
+# ----- [0] RO creates the warehouse-side request -----
+TRANSIENT=$(jq -nc \
+  --arg wp "$WP" \
+  --arg sig "$SPI_SIGNATURE" \
+  --argjson ap "$APPROVALS_MIN" \
+  '{wp:$wp, spiSignature:$sig, approvals:$ap}')
+
+./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
+  "{\"function\":\"CreateWarehouseReIDRequest\",\"Args\":[\"$REQ_ID\"]}" \
+  "$TRANSIENT" \
+  OrgRO OrgRO OrgWPI OrgMO
+successln "[0] Warehouse request created"
+
+# ----- [1] WPI resolves WP -> REF -----
 REF=$(./scripts/queryCC.sh OrgWPI "$CHANNEL_WAREHOUSE" "$CC_WAREHOUSE" \
   "{\"function\":\"GetIdentityReferenceByWP\",\"Args\":[\"$WP\"]}")
 [ -n "$REF" ] || { errorln "WP->REF returned an empty value"; exit 1; }
-successln "[1] WP -> REF resolved successfully ($REF)"
+successln "[1] WP -> REF resolved ($REF)"
 
-# ----- [2] WPI resolves the identity reference to personally identifiable information -----
-# Once the reference is known, the warehouse can access the original PII that was
-# previously registered under that reference.
+# ----- [2] WPI resolves REF -> PII -----
 PII=$(./scripts/queryCC.sh OrgWPI "$CHANNEL_WAREHOUSE" "$CC_IDENTITY" \
   "{\"function\":\"GetPii\",\"Args\":[\"$REF\"]}")
 [ -n "$PII" ] || { errorln "REF->PII returned an empty value"; exit 1; }
-successln "[2] REF -> PII resolved successfully"
+successln "[2] REF -> PII resolved"
 
-# ----- [3] WPI submits the PII and approvals; the chaincode verifies the K-of-N policy -----
-# This is the main authorization check: the chaincode accepts the PII only if the
-# approvals provided match the request ID and satisfy the required quorum size.
+# ----- [3] WPI registers PII; chaincode verifies EC quorum + SPI attestation -----
 ./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
   "{\"function\":\"RegisterReIdentifiedPII\",\"Args\":[\"$REQ_ID\"]}" \
-  "{\"pii\":\"$PII\",\"approvals\":$APPROVALS_JSON}" \
+  "{\"pii\":\"$PII\"}" \
   OrgWPI OrgWPI OrgMO OrgEC1 OrgEC2
-successln "[3] K-of-N verified on-chain; PII stored"
+successln "[3] K-of-N + SPI attestation verified; PII stored"
 
-# ----- [4] MO reads the stored PII and verifies that it matches the original value -----
-# The monitoring or operational role verifies the stored value exactly matches the
-# original PII, ensuring integrity after the on-chain admission checks.
+# ----- [4] MO reads back -----
 PII_FINAL=$(./scripts/queryCC.sh OrgMO "$CHANNEL_WAREHOUSE" "$CC_WREID" \
   "{\"function\":\"GetReidentifiedPII\",\"Args\":[\"$REQ_ID\"]}")
 [ "$PII_FINAL" == "$PII" ] || { errorln "PII values do not match"; exit 1; }
 successln "[4] MO retrieved the PII successfully"
 
-# ----- Negative signature validation checks -----
-# These checks confirm that the chaincode rejects invalid approval data and enforces
-# the safety rules against request substitution, tampering, and insufficient quorum.
+# ----- Negative checks -----
 set +e
-infoln "Running negative signature validation checks"
+infoln "Running negative validation checks"
 
-# 3.1 — An approval signed for a different request ID must be rejected.
+# 3.1 — Unknown request ID (no CreateWarehouseReIDRequest was issued)
 BAD_REQ="fake-$(openssl rand -hex 4)"
-BAD_APPROVALS=$(echo "$APPROVALS_JSON" | jq -c 'map(. + {mspId:.mspId})')
 ./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
   "{\"function\":\"RegisterReIdentifiedPII\",\"Args\":[\"$BAD_REQ\"]}" \
-  "{\"pii\":\"injection\",\"approvals\":$BAD_APPROVALS}" \
+  "{\"pii\":\"injection\"}" \
   OrgWPI OrgWPI OrgMO OrgEC1 OrgEC2 >/dev/null 2>&1 \
-  && { errorln "FAIL: accepted approvals signed for the wrong request ID"; exit 1; }
+  && { errorln "FAIL: accepted unknown request ID"; exit 1; }
 
-# 3.2 — A tampered signature must be rejected.
-TAMPERED=$(echo "$APPROVALS_JSON" | jq -c 'map(if .decision=="approve" then . + {signature: (.signature[0:4] + "AAAA" + .signature[8:])} else . end)')
+# 3.2 — Tampered SPI signature: request is created, but PII write must fail
+TAMPERED_SIG="${SPI_SIGNATURE:0:4}AAAA${SPI_SIGNATURE:8}"
+BAD_TRANSIENT=$(jq -nc \
+  --arg wp "$WP" \
+  --arg sig "$TAMPERED_SIG" \
+  --argjson ap "$APPROVALS_MIN" \
+  '{wp:$wp, spiSignature:$sig, approvals:$ap}')
+BAD_REQ2="tampered-$(openssl rand -hex 4)"
 ./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
-  "{\"function\":\"RegisterReIdentifiedPII\",\"Args\":[\"$REQ_ID-suffix\"]}" \
-  "{\"pii\":\"injection\",\"approvals\":$TAMPERED}" \
-  OrgWPI OrgWPI OrgMO OrgEC1 OrgEC2 >/dev/null 2>&1 \
-  && { errorln "FAIL: accepted a tampered signature"; exit 1; }
+  "{\"function\":\"CreateWarehouseReIDRequest\",\"Args\":[\"$BAD_REQ2\"]}" \
+  "$BAD_TRANSIENT" OrgRO OrgRO OrgWPI OrgMO >/dev/null 2>&1
 
-# 3.3 — A request with fewer than K approvals must be rejected.
+./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
+  "{\"function\":\"RegisterReIdentifiedPII\",\"Args\":[\"$BAD_REQ2\"]}" \
+  "{\"pii\":\"injection\"}" \
+  OrgWPI OrgWPI OrgMO OrgEC1 OrgEC2 >/dev/null 2>&1 \
+  && { errorln "FAIL: accepted tampered SPI signature"; exit 1; }
+
+# 3.3 — Under-quorum approvals: request is created, but PII write must fail
 ONE=$(echo "$APPROVALS_JSON" | jq -c '[.[] | select(.decision=="approve")][0:1]')
+BAD_TRANSIENT2=$(jq -nc \
+  --arg wp "$WP" \
+  --arg sig "$SPI_SIGNATURE" \
+  --argjson ap "$ONE" \
+  '{wp:$wp, spiSignature:$sig, approvals:$ap}')
+BAD_REQ3="underquorum-$(openssl rand -hex 4)"
 ./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
-  "{\"function\":\"RegisterReIdentifiedPII\",\"Args\":[\"$REQ_ID-x\"]}" \
-  "{\"pii\":\"injection\",\"approvals\":$ONE}" \
+  "{\"function\":\"CreateWarehouseReIDRequest\",\"Args\":[\"$BAD_REQ3\"]}" \
+  "$BAD_TRANSIENT2" OrgRO OrgRO OrgWPI OrgMO >/dev/null 2>&1
+
+./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
+  "{\"function\":\"RegisterReIdentifiedPII\",\"Args\":[\"$BAD_REQ3\"]}" \
+  "{\"pii\":\"injection\"}" \
   OrgWPI OrgWPI OrgMO OrgEC1 OrgEC2 >/dev/null 2>&1 \
-  && { errorln "FAIL: accepted fewer than K approvals"; exit 1; }
+  && { errorln "FAIL: accepted under-quorum approvals"; exit 1; }
+
+# 3.4 — Replay: create a request for a new ID reusing the old approvals/signature
+REPLAY_REQ="replay-$(openssl rand -hex 4)"
+REPLAY_TRANSIENT=$(jq -nc \
+  --arg wp "$WP" \
+  --arg sig "$SPI_SIGNATURE" \
+  --argjson ap "$APPROVALS_MIN" \
+  '{wp:$wp, spiSignature:$sig, approvals:$ap}')
+./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
+  "{\"function\":\"CreateWarehouseReIDRequest\",\"Args\":[\"$REPLAY_REQ\"]}" \
+  "$REPLAY_TRANSIENT" OrgRO OrgRO OrgWPI OrgMO >/dev/null 2>&1
+
+./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
+  "{\"function\":\"RegisterReIdentifiedPII\",\"Args\":[\"$REPLAY_REQ\"]}" \
+  "{\"pii\":\"injection\"}" \
+  OrgWPI OrgWPI OrgMO OrgEC1 OrgEC2 >/dev/null 2>&1 \
+  && { errorln "FAIL: accepted replay of SPI attestation and EC approvals"; exit 1; }
 
 set -e
 successln "Warehouse side: all validation checks passed."

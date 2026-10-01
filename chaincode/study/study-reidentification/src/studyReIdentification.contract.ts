@@ -25,9 +25,11 @@ interface ReIDRequest {
 interface ReIDResult {
   reqId: string;
   wp: string;
+  spiSignature: string; 
   resolvedAt: string;
 }
 interface ReIDApproval { mspId: string; decision: Decision; signature: string; }
+
 
 /** Builds the world-state key for a re-identification request. */
 function requestStateKey(reqId: string): string {
@@ -214,41 +216,60 @@ export class StudyReIdentificationContract extends Contract {
   /** Stores the resolved work package in private data after EC approval. */
   @Transaction()
   public async RegisterReIDResult(ctx: Context, reqId: string): Promise<void> {
-  this.assertCallerIs(ctx, SPI_MSP_ID);
+    const SPI_MSP_ID = 'OrgSPIMSP';
+    this.assertCallerIs(ctx, SPI_MSP_ID);
 
-  const transient = ctx.stub.getTransient();
-  if (!transient.has('wp')) throw new Error('Transient "wp" required');
-  const wp = Buffer.from(transient.get('wp')!).toString('utf8');
-  if (!wp) throw new Error('Transient "wp" must not be empty');
+    const transient = ctx.stub.getTransient();
+    if (!transient.has('wp'))          throw new Error('Transient "wp" required');
+    if (!transient.has('spiSignature')) throw new Error('Transient "spiSignature" required');
+    const wp           = Buffer.from(transient.get('wp')!).toString('utf8');
+    const spiSignature = Buffer.from(transient.get('spiSignature')!).toString('utf8');
+    if (!wp || !spiSignature) throw new Error('wp/spiSignature must not be empty');
 
-  const reqBytes = await ctx.stub.getState(requestStateKey(reqId));
-  if (!reqBytes || reqBytes.length === 0) throw new Error(`reqId ${reqId} not found`);
-  const request = JSON.parse(reqBytes.toString()) as ReIDRequest;
-  if (request.status !== 'approved') {
-    throw new Error(`reqId ${reqId} is not approved (status=${request.status})`);
+    const reqBytes = await ctx.stub.getState(requestStateKey(reqId));
+    if (!reqBytes || reqBytes.length === 0) throw new Error(`reqId ${reqId} not found`);
+    const request = JSON.parse(reqBytes.toString()) as ReIDRequest;
+    if (request.status !== 'approved') {
+      throw new Error(`reqId ${reqId} is not approved (status=${request.status})`);
+    }
+
+    const spiKeyBytes = await ctx.stub.getState(`spi_key:${SPI_MSP_ID}`);
+    if (!spiKeyBytes || spiKeyBytes.length === 0) {
+      throw new Error('SPI public key is not registered on the Study Channel');
+    }
+    const message = `spi_resolution:${reqId}:${wp}`;
+    if (!verifyEcdsa(spiKeyBytes.toString(), message, spiSignature)) {
+      throw new Error('Invalid SPI attestation');
+    }
+
+    const resultKey = resultPrivateDataKey(reqId);
+    const existing = await ctx.stub.getPrivateData(PDC_COLLECTION, resultKey);
+    if (existing && existing.length > 0) return; // idempotente
+
+    const resolvedAt = timestampToIso(ctx);
+    await ctx.stub.putPrivateData(
+      PDC_COLLECTION,
+      resultKey,
+      Buffer.from(JSON.stringify({ reqId, wp, spiSignature, resolvedAt } as ReIDResult))
+    );
+    ctx.stub.setEvent('ReIDResultRegistered', Buffer.from(JSON.stringify({ reqId })));
   }
-
-  const resultKey = resultPrivateDataKey(reqId);
-  const existing = await ctx.stub.getPrivateData(PDC_COLLECTION, resultKey);
-  if (existing && existing.length > 0) return; // idempotente
-
-  const resolvedAt = timestampToIso(ctx);
-  await ctx.stub.putPrivateData(
-    PDC_COLLECTION,
-    resultKey,
-    Buffer.from(JSON.stringify({ reqId, wp, resolvedAt } as ReIDResult))
-  );
-
-  ctx.stub.setEvent('ReIDResultRegistered', Buffer.from(JSON.stringify({ reqId })));
-}
 
   /** Returns the private work package associated with an approved request. */
   @Transaction(false) @Returns('string')
-  public async GetReIDResult(ctx: Context, reqId: string): Promise<string> {
+  public async GetReIDBundle(ctx: Context, reqId: string): Promise<string> {
     const b = await ctx.stub.getPrivateData(PDC_COLLECTION, resultPrivateDataKey(reqId));
     if (!b || b.length === 0) throw new Error(`reqId ${reqId} not found`);
-    return (JSON.parse(b.toString()) as ReIDResult).wp;
-  }
+    return b.toString(); // { reqId, wp, spiSignature, resolvedAt }
+}
+
+  /** Registers the public key of the SPI. */
+  @Transaction()
+  public async RegisterSPIPublicKey(ctx: Context, publicKeyPem: string): Promise<void> {
+    if (!publicKeyPem) throw new Error('publicKeyPem is required');
+    await ctx.stub.putState(`spi_key:${SPI_MSP_ID}`, Buffer.from(publicKeyPem));
+    ctx.stub.setEvent('SPIPublicKeyRegistered', Buffer.from(JSON.stringify({ mspId: SPI_MSP_ID })));
+}
 
   /** Rejects the transaction unless the caller belongs to the expected organization. */
   private assertCallerIs(ctx: Context, expectedMsp: string): void {

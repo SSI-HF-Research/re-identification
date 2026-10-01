@@ -17,11 +17,9 @@ register_one() {
   local cc="$4"         # chaincode name
   local endorsers="$5"  # space-separated list of organizations that endorse the transaction
 
-  # Extract the EC public key for the committee member domain.
   local pub
   pub=$(node scripts/test/ec-sign.js pubkey "$domain")
 
-  # JSON-encode the public key so it can be passed as a chaincode argument.
   local pub_json
   pub_json=$(printf '%s' "$pub" | jq -Rs .)
 
@@ -31,16 +29,38 @@ register_one() {
     NA "$org" $endorsers
 }
 
-# Endorsers for each committee role: study and warehouse committees.
+# Register the SPI's public key so its attestation can be verified on both chains.
+register_spi_key() {
+  local domain="$1"     # e.g. spi.example.com
+  local org="$2"        # e.g. OrgSPI
+  local channel="$3"    # study-channel | warehouse-channel
+  local cc="$4"         # chaincode name
+  local endorsers="$5"  # space-separated list of organizations that endorse the transaction
+
+  local pub
+  pub=$(node scripts/test/ec-sign.js pubkey "$domain")
+
+  local pub_json
+  pub_json=$(printf '%s' "$pub" | jq -Rs .)
+
+  infoln "Registering SPI public key in $channel ($cc)"
+  ./scripts/invokeCC.sh "$channel" "$cc" \
+    "{\"function\":\"RegisterSPIPublicKey\",\"Args\":[$pub_json]}" \
+    NA "$org" $endorsers
+}
+
 STUDY_ENDORSERS_ALL="OrgEC1 OrgEC2 OrgEC3 OrgSPI OrgRO"
 WAREHOUSE_ENDORSERS_ALL="OrgEC1 OrgEC2 OrgEC3 OrgWPI OrgMO"
 
 # Register the EC committee members on both channels.
-# Each pair contains the domain and the org that owns that committee member.
 for pair in "ec1.example.com OrgEC1" "ec2.example.com OrgEC2" "ec3.example.com OrgEC3"; do
   set -- $pair
   register_one "$1" "$2" study-channel     "$CC_SREID" "$STUDY_ENDORSERS_ALL"
   register_one "$1" "$2" warehouse-channel "$CC_WREID" "$WAREHOUSE_ENDORSERS_ALL"
 done
 
-successln "Committee registered on both channels."
+# Register the SPI public key on both channels.
+register_spi_key "spi.example.com" "OrgRO" study-channel     "$CC_SREID" "$STUDY_ENDORSERS_ALL"
+register_spi_key "spi.example.com" "OrgRO" warehouse-channel "$CC_WREID" "$WAREHOUSE_ENDORSERS_ALL"
+
+successln "Committee and SPI keys registered on both channels."

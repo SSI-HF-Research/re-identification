@@ -1,18 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-# This script simulates the study-side flow of a re-identification process.
-# It creates a re-identification request, collects approval signatures from
-# authorized entities, resolves the service provider (SP) back to the warehouse
-# pseudonym (WP), stores the final result, and exports the context for the
-# warehouse side.
+# Study-side flow of a re-identification process:
+# create request -> collect K-of-N EC approvals -> SPI resolves SP -> WP
+# -> SPI attests (reqId, WP) -> RO fetches the bundle for the warehouse side.
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 source scripts/utils.sh
 
-# Capture the transaction ID returned by a Fabric invoke and save it to a file so
-# the script can reuse it in later steps.
 invoke_capture_txid() {
   local out_file="$1"; shift
   local output rc=0
@@ -39,17 +35,13 @@ DATAMART_ID="${DATAMART_ID:-dm-1}"
 WORKDIR="$(mktemp -d)"; trap 'rm -rf "$WORKDIR"' EXIT
 
 # ----- Setup synthetic identity + datamart mapping -----
-# Step 0: create a fake patient identifier (PII), generate a reference value,
-# then register the PII -> reference association in the warehouse chain and map
-# that reference to a warehouse pseudonym (WP). The study side then derives the
-# study-specific service provider (SP) mapping for the datamart.
 PII="pii-reid-$(openssl rand -hex 4)"
 REF="ref-$(openssl rand -hex 16)"
 WP=$(node scripts/test/crypto-helper.js wp "$WP_MASTER_KEY" "$PII")
 
 ./scripts/invokeCC.sh warehouse-channel identity-mapping \
   '{"function":"RegisterIdentityReference","Args":[]}' \
-  "{\"pii\":\"$PII\",\"identityReference\":\"$REF\"}" OrgIM OrgIM OrgWPI
+  "{\"pii\":\"$PII\"}" OrgIM OrgIM OrgWPI
 
 ./scripts/invokeCC.sh warehouse-channel warehouse-mapping \
   "{\"function\":\"RegisterWP\",\"Args\":[\"$REF\"]}" \
@@ -67,9 +59,6 @@ SP=$(./scripts/queryCC.sh OrgSC study-channel study-mapping \
 successln "[setup] REF=$REF WP=$WP SP=$SP"
 
 # ----- [1] RO creates the request -----
-# The research organization opens a re-identification request for the given
-# study/datamart and generated SP. This request gets a transaction-based ID that
-# is then used throughout the approval workflow.
 TX_FILE="$WORKDIR/txid"
 : > "$TX_FILE"
 
@@ -90,8 +79,6 @@ fi
 successln "[1] reqId=$REQ_ID"
 
 # ----- [2] EC1 signs approval -----
-# The first approval can only move the request from 'created' to 'pending' state.
-# It proves that one authorized entity has accepted the re-identification.
 MSG1="reid_approval:${REQ_ID}:approve"
 SIG1=$(node scripts/test/ec-sign.js sign ec1.example.com "$MSG1")
 ./scripts/invokeCC.sh study-channel "$CC_SREID" \
@@ -103,8 +90,6 @@ STATUS=$(./scripts/queryCC.sh OrgRO study-channel "$CC_SREID" \
 successln "[2] 1/2 approvals: status=pending OK"
 
 # ----- [3] EC2 signs -> quorum reached -----
-# The second approval is required to reach the final 'approved' state. Once both
-# signatures are present, the request is considered authorized.
 MSG2="reid_approval:${REQ_ID}:approve"
 SIG2=$(node scripts/test/ec-sign.js sign ec2.example.com "$MSG2")
 ./scripts/invokeCC.sh study-channel "$CC_SREID" \
@@ -116,32 +101,38 @@ STATUS=$(./scripts/queryCC.sh OrgRO study-channel "$CC_SREID" \
 successln "[3] 2/2 approvals: status=approved OK"
 
 # ----- [4] SPI resolves SP -> WP -----
-# This lookup verifies the governance mapping: the service provider generated for
-# the study must resolve back to the same warehouse pseudonym (WP) used during
-# registration.
 WP_FROM_SP=$(./scripts/queryCC.sh OrgSPI study-channel study-mapping \
   "{\"function\":\"GetWPBySP\",\"Args\":[\"$SP\"]}")
 [ "$WP_FROM_SP" == "$WP" ] || { errorln "WP mismatch"; exit 1; }
 successln "[4] SP -> WP OK"
 
-# ----- [5] SPI stores the WP in the result record -----
-# The data owner stores the final pseudonym result in the study re-identification
-# chain so the warehouse side can later retrieve and match the request.
+# ----- [5] SPI signs (reqId, WP) and stores both -----
+SPI_MSG="spi_resolution:${REQ_ID}:${WP_FROM_SP}"
+SPI_SIG=$(node scripts/test/ec-sign.js sign spi.example.com "$SPI_MSG")
+
 ./scripts/invokeCC.sh study-channel "$CC_SREID" \
   "{\"function\":\"RegisterReIDResult\",\"Args\":[\"$REQ_ID\"]}" \
-  "{\"wp\":\"$WP_FROM_SP\"}" OrgSPI OrgSPI OrgRO
-successln "[5] RegisterReIDResult OK"
+  "{\"wp\":\"$WP_FROM_SP\",\"spiSignature\":\"$SPI_SIG\"}" \
+  OrgSPI OrgSPI OrgRO
+successln "[5] RegisterReIDResult OK (with SPI attestation)"
 
-# ----- [6] Export context for the warehouse side -----
-# Save the approval evidence and metadata needed by the warehouse flow to
-# continue with the downstream re-identification processing.
+# ----- [6] RO fetches bundle + approvals; exports context -----
+BUNDLE=$(./scripts/queryCC.sh OrgRO study-channel "$CC_SREID" \
+  "{\"function\":\"GetReIDBundle\",\"Args\":[\"$REQ_ID\"]}")
+
+WP_FROM_BUNDLE=$(echo "$BUNDLE" | jq -r .wp)
+SPI_SIG_FROM_BUNDLE=$(echo "$BUNDLE" | jq -r .spiSignature)
+[ "$WP_FROM_BUNDLE" == "$WP" ] || { errorln "WP mismatch in bundle"; exit 1; }
+[ -n "$SPI_SIG_FROM_BUNDLE" ] || { errorln "SPI signature missing in bundle"; exit 1; }
+
 ./scripts/queryCC.sh OrgRO study-channel "$CC_SREID" \
   "{\"function\":\"GetReIDApprovals\",\"Args\":[\"$REQ_ID\"]}" > "$WORKDIR/approvals.json"
 
 if [ -n "${STUDY_OUT_FILE:-}" ]; then
   {
     echo "REQ_ID='$REQ_ID'"
-    echo "WP='$WP'"
+    echo "WP='$WP_FROM_BUNDLE'"
+    echo "SPI_SIGNATURE='$SPI_SIG_FROM_BUNDLE'"
     echo "SP='$SP'"
     echo "PII='$PII'"
     echo "DATAMART_ID='$DATAMART_ID'"
