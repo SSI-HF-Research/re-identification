@@ -25,9 +25,13 @@ fi
 WAREHOUSE_COLLECTIONS="./chaincode/warehouse/collections_config.json"
 STUDY_COLLECTIONS="./chaincode/study/collections_config.json"
 
-WAREHOUSE_ORGS=(OrgIM OrgWPI OrgHDW OrgRO OrgMO OrgEC1 OrgEC2 OrgEC3)
+WAREHOUSE_ORGS=(OrgIM OrgWPI OrgHDW)
 
-STUDY_ORGS=(OrgSC OrgSPI OrgRO OrgMO OrgEC1 OrgEC2 OrgEC3)
+STUDY_ORGS=(OrgSC OrgSPI OrgRO)
+
+W_REID_ORGS=(OrgRO OrgWPI OrgMO)
+
+S_REID_ORGS=(OrgRO OrgSPI OrgEC1 OrgEC2 OrgEC3)
 
 deploy_chaincode() {
   local channel="$1"
@@ -55,13 +59,13 @@ add_deployment warehouse-channel warehouse-mapping \
   "${WAREHOUSE_ORGS[@]}"
 add_deployment warehouse-channel warehouse-reidentification \
   ./chaincode/warehouse/warehouse-reidentification "$WAREHOUSE_COLLECTIONS" 1.0 1 \
-  "${WAREHOUSE_ORGS[@]}"
+  "${W_REID_ORGS[@]}"
 add_deployment study-channel study-mapping \
   ./chaincode/study/study-mapping "$STUDY_COLLECTIONS" 1.0 1 \
   "${STUDY_ORGS[@]}"
 add_deployment study-channel study-reidentification \
   ./chaincode/study/study-reidentification "$STUDY_COLLECTIONS" 1.0 1 \
-  "${STUDY_ORGS[@]}"
+  "${S_REID_ORGS[@]}"
 
 run_deployment() {
   local definition="$1"
@@ -69,7 +73,7 @@ run_deployment() {
   IFS='|' read -r channel name source collections version sequence orgs <<< "$definition"
 
   echo ">> starting $name on $channel"
-  FABRIC_LOG_FILE="$LOG_DIR/${name}-fabric.log" \
+  FABRIC_LOG_FILE="$LOG_DIR/${name}.log" \
     ./scripts/network.sh deployCC "$channel" "$name" "$source" "$version" "$sequence" "$collections" $orgs
 }
 

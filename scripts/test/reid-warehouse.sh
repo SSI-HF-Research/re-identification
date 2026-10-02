@@ -34,7 +34,7 @@ TRANSIENT=$(jq -nc \
 ./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
   "{\"function\":\"CreateWarehouseReIDRequest\",\"Args\":[\"$REQ_ID\"]}" \
   "$TRANSIENT" \
-  OrgRO OrgRO OrgWPI OrgMO
+    OrgRO OrgRO OrgWPI OrgMO
 successln "[0] Warehouse request created"
 
 # ----- [1] WPI resolves WP -> REF -----
@@ -53,7 +53,7 @@ successln "[2] REF -> PII resolved"
 ./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
   "{\"function\":\"RegisterReIdentifiedPII\",\"Args\":[\"$REQ_ID\"]}" \
   "{\"pii\":\"$PII\"}" \
-  OrgWPI OrgWPI OrgMO OrgEC1 OrgEC2
+  OrgWPI OrgWPI OrgMO
 successln "[3] K-of-N + SPI attestation verified; PII stored"
 
 # ----- [4] MO reads back -----
@@ -71,7 +71,7 @@ BAD_REQ="fake-$(openssl rand -hex 4)"
 ./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
   "{\"function\":\"RegisterReIdentifiedPII\",\"Args\":[\"$BAD_REQ\"]}" \
   "{\"pii\":\"injection\"}" \
-  OrgWPI OrgWPI OrgMO OrgEC1 OrgEC2 >/dev/null 2>&1 \
+  OrgWPI OrgWPI OrgRO >/dev/null 2>&1 \
   && { errorln "FAIL: accepted unknown request ID"; exit 1; }
 
 # 3.2 — Tampered SPI signature: request is created, but PII write must fail
@@ -84,12 +84,12 @@ BAD_TRANSIENT=$(jq -nc \
 BAD_REQ2="tampered-$(openssl rand -hex 4)"
 ./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
   "{\"function\":\"CreateWarehouseReIDRequest\",\"Args\":[\"$BAD_REQ2\"]}" \
-  "$BAD_TRANSIENT" OrgRO OrgRO OrgWPI OrgMO >/dev/null 2>&1
+  "$BAD_TRANSIENT"   OrgRO OrgRO OrgWPI OrgMO >/dev/null 2>&1
 
 ./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
   "{\"function\":\"RegisterReIdentifiedPII\",\"Args\":[\"$BAD_REQ2\"]}" \
   "{\"pii\":\"injection\"}" \
-  OrgWPI OrgWPI OrgMO OrgEC1 OrgEC2 >/dev/null 2>&1 \
+  OrgWPI OrgWPI OrgMO >/dev/null 2>&1 \
   && { errorln "FAIL: accepted tampered SPI signature"; exit 1; }
 
 # 3.3 — Under-quorum approvals: request is created, but PII write must fail
@@ -102,12 +102,12 @@ BAD_TRANSIENT2=$(jq -nc \
 BAD_REQ3="underquorum-$(openssl rand -hex 4)"
 ./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
   "{\"function\":\"CreateWarehouseReIDRequest\",\"Args\":[\"$BAD_REQ3\"]}" \
-  "$BAD_TRANSIENT2" OrgRO OrgRO OrgWPI OrgMO >/dev/null 2>&1
+  "$BAD_TRANSIENT2"   OrgRO OrgRO OrgWPI OrgMO >/dev/null 2>&1
 
 ./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
   "{\"function\":\"RegisterReIdentifiedPII\",\"Args\":[\"$BAD_REQ3\"]}" \
   "{\"pii\":\"injection\"}" \
-  OrgWPI OrgWPI OrgMO OrgEC1 OrgEC2 >/dev/null 2>&1 \
+  OrgWPI OrgWPI OrgMO >/dev/null 2>&1 \
   && { errorln "FAIL: accepted under-quorum approvals"; exit 1; }
 
 # 3.4 — Replay: create a request for a new ID reusing the old approvals/signature
@@ -119,12 +119,12 @@ REPLAY_TRANSIENT=$(jq -nc \
   '{wp:$wp, spiSignature:$sig, approvals:$ap}')
 ./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
   "{\"function\":\"CreateWarehouseReIDRequest\",\"Args\":[\"$REPLAY_REQ\"]}" \
-  "$REPLAY_TRANSIENT" OrgRO OrgRO OrgWPI OrgMO >/dev/null 2>&1
+  "$REPLAY_TRANSIENT"   OrgRO OrgRO OrgWPI OrgMO >/dev/null 2>&1
 
 ./scripts/invokeCC.sh "$CHANNEL_WAREHOUSE" "$CC_WREID" \
   "{\"function\":\"RegisterReIdentifiedPII\",\"Args\":[\"$REPLAY_REQ\"]}" \
   "{\"pii\":\"injection\"}" \
-  OrgWPI OrgWPI OrgMO OrgEC1 OrgEC2 >/dev/null 2>&1 \
+  OrgWPI OrgWPI OrgMO  >/dev/null 2>&1 \
   && { errorln "FAIL: accepted replay of SPI attestation and EC approvals"; exit 1; }
 
 set -e

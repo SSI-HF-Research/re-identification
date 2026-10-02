@@ -49,8 +49,8 @@ register_spi_key() {
     NA "$org" $endorsers
 }
 
-STUDY_ENDORSERS_ALL="OrgEC1 OrgEC2 OrgEC3 OrgSPI OrgRO"
-WAREHOUSE_ENDORSERS_ALL="OrgEC1 OrgEC2 OrgEC3 OrgWPI OrgMO"
+STUDY_ENDORSERS_ALL="OrgEC1 OrgEC2 OrgRO"
+WAREHOUSE_ENDORSERS_ALL="OrgRO OrgWPI OrgMO"
 
 # Register the EC committee members on both channels.
 for pair in "ec1.example.com OrgEC1" "ec2.example.com OrgEC2" "ec3.example.com OrgEC3"; do

@@ -1,4 +1,4 @@
-./scripts/network.sh deployCC warehouse-channel identity-mapping ./chaincode/warehouse/identity-mapping 1.0 1 ./chaincode/warehouse/collections_config.json OrgIM OrgWPI OrgHDW OrgRO OrgMO OrgEC1 OrgEC2 OrgEC3
+./scripts/network.sh deployCC warehouse-channel identity-mapping ./chaincode/warehouse/identity-mapping 2.0 2 ./chaincode/warehouse/collections_config.json OrgIM OrgWPI OrgHDW 
 
 export PATH=$PWD/bin:$PATH
 export FABRIC_CFG_PATH="$PWD/network"

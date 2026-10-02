@@ -9,6 +9,7 @@ const K_OF_N_THRESHOLD = 2;
 const REID_KEY_PREFIX = 'reid:';
 const EC_KEY_PREFIX = 'ec_key:';
 const RO_MSP_ID  = 'OrgROMSP';
+const SPI_MSP_ID = 'OrgSPIMSP';
 
 interface ReIDEntry { reqId: string; pii: string; registeredAt: string; }
 interface ReIDApproval { mspId: string; decision: 'approve' | 'reject'; signature: string; }
@@ -153,8 +154,8 @@ export class WarehouseReIdentificationContract extends Contract {
     };
     await ctx.stub.putPrivateData(PDC_COLLECTION, key, Buffer.from(JSON.stringify(entry)));
 
-    request.status = 'completed';
-    await ctx.stub.putState(warehouseRequestKey(reqId), Buffer.from(JSON.stringify(request)));
+    // request.status = 'completed';
+    // await ctx.stub.putState(warehouseRequestKey(reqId), Buffer.from(JSON.stringify(request)));
 
     ctx.stub.setEvent('WarehouseReIDRegistered',
       Buffer.from(JSON.stringify({ reqId, approveCount })));

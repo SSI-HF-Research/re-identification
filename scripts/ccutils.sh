@@ -64,7 +64,22 @@ checkCommitReadiness() {
 }
 
 commitChaincodeDefinition() {
-  parsePeerConnectionParameters "$@"
+  # Usa SEMPRE as orgs que vieram do deployCC.sh via COMMIT_ORGS
+  local orgs_from_env
+  read -r -a orgs_from_env <<< "${COMMIT_ORGS:-}"
+
+  if [ "${#orgs_from_env[@]}" -eq 0 ]; then
+    # fallback: usa o que foi passado como argumento
+    orgs_from_env=("$@")
+  fi
+
+  PEER_CONN_PARMS=()
+  for org in "${orgs_from_env[@]}"; do
+    setGlobalsForOrg "$org"
+    PEER_CONN_PARMS+=(--peerAddresses "$CORE_PEER_ADDRESS" \
+                      --tlsRootCertFiles "$CORE_PEER_TLS_ROOTCERT_FILE")
+  done
+
   peer lifecycle chaincode commit \
     -o "$ORDERER_ADDRESS" --ordererTLSHostnameOverride "$ORDERER_HOSTNAME_OVERRIDE" \
     --tls --cafile "$ORDERER_CA" \

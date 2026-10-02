@@ -36,12 +36,12 @@ WORKDIR="$(mktemp -d)"; trap 'rm -rf "$WORKDIR"' EXIT
 
 # ----- Setup synthetic identity + datamart mapping -----
 PII="pii-reid-$(openssl rand -hex 4)"
-REF="ref-$(openssl rand -hex 16)"
 WP=$(node scripts/test/crypto-helper.js wp "$WP_MASTER_KEY" "$PII")
 
-./scripts/invokeCC.sh warehouse-channel identity-mapping \
+CAPTURE_TXID_FILE="$WORKDIR/identity-ref" ./scripts/invokeCC.sh warehouse-channel identity-mapping \
   '{"function":"RegisterIdentityReference","Args":[]}' \
   "{\"pii\":\"$PII\"}" OrgIM OrgIM OrgWPI
+REF=$(cat "$WORKDIR/identity-ref")
 
 ./scripts/invokeCC.sh warehouse-channel warehouse-mapping \
   "{\"function\":\"RegisterWP\",\"Args\":[\"$REF\"]}" \
@@ -66,7 +66,7 @@ if ! invoke_capture_txid "$TX_FILE" \
       "$CHANNEL_STUDY" "$CC_SREID" \
       "{\"function\":\"CreateReIDRequest\",\"Args\":[\"$STUDY_ID\",\"$DATAMART_ID\",\"$SP\"]}" \
       NA \
-      OrgRO OrgRO OrgSPI OrgSC OrgEC1 OrgEC2; then
+      OrgRO OrgRO OrgSPI OrgEC1 OrgEC2; then
   errorln "[1] FAILED: CreateReIDRequest returned an error"
   exit 1
 fi
@@ -83,7 +83,7 @@ MSG1="reid_approval:${REQ_ID}:approve"
 SIG1=$(node scripts/test/ec-sign.js sign ec1.example.com "$MSG1")
 ./scripts/invokeCC.sh study-channel "$CC_SREID" \
   "{\"function\":\"SignReIDRequest\",\"Args\":[\"$REQ_ID\",\"approve\",\"$SIG1\"]}" \
-  NA OrgEC1 OrgEC1 OrgEC2 OrgEC3 OrgSPI OrgRO
+  NA OrgEC1 OrgEC1 OrgEC2  OrgRO
 STATUS=$(./scripts/queryCC.sh OrgRO study-channel "$CC_SREID" \
   "{\"function\":\"GetReIDRequest\",\"Args\":[\"$REQ_ID\"]}" | jq -r .status)
 [ "$STATUS" == "pending" ] || { errorln "expected pending, got $STATUS"; exit 1; }
@@ -94,7 +94,7 @@ MSG2="reid_approval:${REQ_ID}:approve"
 SIG2=$(node scripts/test/ec-sign.js sign ec2.example.com "$MSG2")
 ./scripts/invokeCC.sh study-channel "$CC_SREID" \
   "{\"function\":\"SignReIDRequest\",\"Args\":[\"$REQ_ID\",\"approve\",\"$SIG2\"]}" \
-  NA OrgEC2 OrgEC1 OrgEC2 OrgEC3 OrgSPI OrgRO
+  NA OrgEC2 OrgEC1 OrgEC2  OrgRO
 STATUS=$(./scripts/queryCC.sh OrgRO study-channel "$CC_SREID" \
   "{\"function\":\"GetReIDRequest\",\"Args\":[\"$REQ_ID\"]}" | jq -r .status)
 [ "$STATUS" == "approved" ] || { errorln "expected approved, got $STATUS"; exit 1; }

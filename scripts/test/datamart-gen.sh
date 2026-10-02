@@ -44,17 +44,18 @@ declare -a REFS WPS PIIS
 
 for i in $(seq 1 "$N_PATIENTS"); do
   pii="teste1-$i"
-  ref="ref-$(openssl rand -hex 16)"
   PIIS[$i]="$pii"
-  REFS[$i]="$ref"
 
-  infoln "Registering patient $i: $ref"
+  infoln "Registering patient $i"
 
   # RegisterIdentityReference (IM + WPI)
-  invoke "$CHANNEL_WAREHOUSE" "$CC_IDENTITY" \
+  CAPTURE_TXID_FILE="$WORKDIR/identity-ref-$i" invoke "$CHANNEL_WAREHOUSE" "$CC_IDENTITY" \
     '{"function":"RegisterIdentityReference","Args":[]}' \
-    "{\"pii\":\"$pii\",\"identityReference\":\"$ref\"}" \
+    "{\"pii\":\"$pii\"}" \
     OrgIM OrgIM OrgWPI
+  ref=$(cat "$WORKDIR/identity-ref-$i")
+  REFS[$i]="$ref"
+  infoln "Identity reference: $ref"
 
   # GetPii via WPI
   pii_back=""

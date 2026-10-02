@@ -106,3 +106,19 @@ parsePeerConnectionParameters() {
     PEER_CONN_PARMS+=(--peerAddresses "$CORE_PEER_ADDRESS" --tlsRootCertFiles "$CORE_PEER_TLS_ROOTCERT_FILE")
   done
 }
+
+orgToMSP() {
+  case "$1" in
+    OrgIM)  echo OrgIMMSP ;;
+    OrgWPI) echo OrgWPIMSP ;;
+    OrgHDW) echo OrgHDWMSP ;;
+    OrgSC)  echo OrgSCMSP  ;;
+    OrgSPI) echo OrgSPIMSP ;;
+    OrgMO)  echo OrgMOMSP  ;;
+    OrgRO)  echo OrgROMSP  ;;
+    OrgEC1) echo OrgEC1MSP ;;
+    OrgEC2) echo OrgEC2MSP ;;
+    OrgEC3) echo OrgEC3MSP ;;
+    *) echo "!! unknown org: $1" >&2; return 1 ;;
+  esac
+}

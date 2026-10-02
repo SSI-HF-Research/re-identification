@@ -1,4 +1,4 @@
 ./scripts/network.sh deployCC warehouse-channel warehouse-reidentification \
-  ./chaincode/warehouse/warehouse-reidentification 1.0 1 \
+  ./chaincode/warehouse/warehouse-reidentification 2.0 2 \
   ./chaincode/warehouse/collections_config.json \
   OrgWPI OrgHDW OrgIM OrgMO OrgRO OrgEC1 OrgEC2 OrgEC3

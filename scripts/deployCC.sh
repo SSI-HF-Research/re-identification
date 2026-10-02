@@ -19,12 +19,27 @@ ORGS=("$@")
 
 [ "${#ORGS[@]}" -eq 0 ] && fatalln "provide at least one org (all members of the channel)"
 
-if [ "$CC_COLL_CONFIG_PATH" = "NA" ]; then
+# ---- collections config ----
+if [ "$CC_COLL_CONFIG_PATH" = "NA" ] || [ -z "$CC_COLL_CONFIG_PATH" ]; then
   CC_COLL_CONFIG=""
 else
   CC_COLL_CONFIG="--collections-config $CC_COLL_CONFIG_PATH"
 fi
+export CC_COLL_CONFIG
+
+# ---- signature policy = OR das orgs passadas ----
 CC_END_POLICY=""
+if [ "${#ORGS[@]}" -gt 0 ]; then
+  policy_parts=()
+  for org in "${ORGS[@]}"; do
+    msp="$(orgToMSP "$org")"
+    policy_parts+=("'${msp}.peer'")
+  done
+  joined="$(IFS=,; echo "${policy_parts[*]}")"
+  CC_END_POLICY="--signature-policy OR(${joined})"
+fi
+export CC_END_POLICY
+export COMMIT_ORGS="${ORGS[*]}"
 
 infoln "Deploy chaincode:"
 infoln "  channel=$CHANNEL_NAME name=$CC_NAME version=$CC_VERSION sequence=$CC_SEQUENCE"

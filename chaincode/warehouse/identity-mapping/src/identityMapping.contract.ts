@@ -22,7 +22,7 @@ export class IdentityMappingContract extends Contract {
     return 'IdentityMappingContract is working!';
   }
 
-  /** Registers a PII value under an identity reference using transient data. */
+  /** Registers a PII value under the current Fabric transaction ID. */
   @Transaction()
   @Returns('string')
   public async RegisterIdentityReference(ctx: Context): Promise<string> {
@@ -30,16 +30,13 @@ export class IdentityMappingContract extends Contract {
 
     const transient = ctx.stub.getTransient();
     const pii = this.getRequiredTransientValue(transient, 'pii');
-    const identityReference = this.getRequiredTransientValue(
-      transient,
-      'identityReference'
-    );
+    const identityReference = ctx.stub.getTxID();
 
     const key = this.getIdentityReferenceKey(identityReference);
     const existing = await ctx.stub.getPrivateData(IDENTITY_MAPPING_COLLECTION, key);
     if (existing && existing.length > 0) {
       ctx.stub.setEvent('IdentityAlreadyExists', Buffer.from(JSON.stringify({identityReference})));
-      return `Identity reference already exists. Skipping creation.`; 
+      return identityReference;
     }
 
     const value: IdentityMappingValue = { identityReference, pii };
@@ -49,7 +46,7 @@ export class IdentityMappingContract extends Contract {
       Buffer.from(JSON.stringify(value))
     );
     ctx.stub.setEvent('IdentityRegistered', Buffer.from(JSON.stringify({identityReference})));
-    return `Identity reference registered successfully.`;
+    return identityReference;
   }
 
   /** Retrieves the PII associated with an identity reference. */
