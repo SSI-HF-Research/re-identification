@@ -1,179 +1,156 @@
-// warehouseMapping.contract.ts
 import { Context, Contract, Returns, Transaction } from 'fabric-contract-api';
 
 const WAREHOUSE_MAPPING_COLLECTION = 'WarehouseMapping';
 const WPI_MSP_ID = 'OrgWPIMSP';
+const MAX_BATCH_SIZE = 1000;
 
-interface WarehouseMappingValue {
-  identityReference: string;
-  wp: string;
-}
-
-interface WarehouseMappingReverseValue {
-  identityReference: string;
-}
+interface RefToWp { wp: string; }
+interface WpToRef { ref: string; }
+interface PairInput { identityReference: string; wp: string; }
 
 export class WarehouseMappingContract extends Contract {
-  /** Creates the Fabric contract with its registered contract name. */
-  constructor() {
-    super('WarehouseMappingContract');
-  }
+  constructor() { super('WarehouseMappingContract'); }
 
-  /**
-   * Performs a basic chaincode health check.
-   *
-   * @returns a message confirming that this contract is available
-   */
-  @Transaction(false)
-  @Returns('string')
+  @Transaction(false) @Returns('string')
   public async testChaincode(ctx: Context): Promise<string> {
     return 'WarehouseMappingContract is working!';
   }
 
-  /**
-   * Registers a warehouse pseudonym (WP) for an identity reference.
-   *
-   * The WP must be supplied through the transaction transient data under the
-   * `wp` field. The method stores both the identity-reference-to-WP mapping
-   * and the reverse WP-to-identity-reference mapping in private data.
-   * Registration is idempotent when the same pair is submitted again, but it
-   * rejects attempts to reuse either value for a different pair.
-   *
-   * @param ctx Fabric transaction context and caller identity
-   * @param identityReference identity reference to associate with the WP
-   * @returns a message describing whether the mapping was created or already existed
-   * @throws when the caller is not WPI, input is missing, or either value is already bound
-   */
-  @Transaction()
-  @Returns('string')
-  public async RegisterWP(
-    ctx: Context,
-    identityReference: string
-  ): Promise<string> {
+  @Transaction() @Returns('string')
+  public async RegisterWPBatch(ctx: Context): Promise<string> {
     this.assertCallerIsWpi(ctx);
 
-    if (!identityReference || identityReference.length === 0) {
-      throw new Error('identityReference is required');
+    const raw = this.getRequiredTransient(ctx.stub.getTransient(), 'pairs');
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { throw new Error('Transient "pairs" must be JSON'); }
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      throw new Error('"pairs" must be a non-empty array');
+    }
+    if (parsed.length > MAX_BATCH_SIZE) {
+      throw new Error(`batch size ${parsed.length} exceeds ${MAX_BATCH_SIZE}`);
     }
 
-    const transient = ctx.stub.getTransient();
-    if (!transient.has('wp')) {
-      throw new Error('Transient field "wp" is required');
-    }
-    const wp = Buffer.from(transient.get('wp')!).toString('utf8');
-    if (!wp || wp.length === 0) {
-      throw new Error('Transient field "wp" must not be empty');
-    }
+    const entries: PairInput[] = [];
+    const seenRefs = new Set<string>();
+    const seenWps = new Set<string>();
+    let imBatchId: string | null = null;
 
-    const refKey = this.getReferenceKey(identityReference);
-    const wpKey = this.getWpKey(wp);
+    for (let i = 0; i < parsed.length; i++) {
+      const p = parsed[i] as Partial<PairInput>;
+      if (!p || typeof p !== 'object' || Array.isArray(p)) {
+        throw new Error(`pairs[${i}] must be an object`);
+      }
+      if (typeof p.identityReference !== 'string' || p.identityReference.length === 0) {
+        throw new Error(`pairs[${i}].identityReference must be a non-empty string`);
+      }
+      if (typeof p.wp !== 'string' || p.wp.length === 0) {
+        throw new Error(`pairs[${i}].wp must be a non-empty string`);
+      }
+      if (seenRefs.has(p.identityReference)) {
+        throw new Error(`duplicate identityReference: ${p.identityReference}`);
+      }
+      if (seenWps.has(p.wp)) {
+        throw new Error(`duplicate wp: ${p.wp}`);
+      }
+      seenRefs.add(p.identityReference);
+      seenWps.add(p.wp);
 
-    const existingValue = await this.getPrivateData<WarehouseMappingValue>(ctx, refKey);
-    if (existingValue) {
-      if (existingValue.wp !== wp) {
-        throw new Error(
-          `identityReference ${identityReference} already bound to another WP`
-        );
+      const refBatch = this.batchIdOf(p.identityReference);
+      if (imBatchId === null) imBatchId = refBatch;
+      else if (imBatchId !== refBatch) {
+        throw new Error(`all pairs must belong to the same IM batch (got "${imBatchId}" and "${refBatch}")`);
       }
 
-      const existingRev = await this.getPrivateData<WarehouseMappingReverseValue>(ctx, wpKey);
-      if (!existingRev) {
-        const revValue: WarehouseMappingReverseValue = { identityReference };
-        await ctx.stub.putPrivateData(
-          WAREHOUSE_MAPPING_COLLECTION,
-          wpKey,
-          Buffer.from(JSON.stringify(revValue))
-        );
-      }
-
-      return `WP already registered for identityReference ${identityReference}`;
+      entries.push({ identityReference: p.identityReference, wp: p.wp });
     }
+    if (imBatchId === null) throw new Error('no pairs to register');
 
-    const existingRev = await this.getPrivateData<WarehouseMappingReverseValue>(ctx, wpKey);
-    if (existingRev) {
-      const rev = existingRev;
-      if (rev.identityReference !== identityReference) {
-        throw new Error(
-          `WP already bound to another identityReference (${rev.identityReference})`
-        );
+    for (const e of entries) {
+      const existingRef = await this.getRefToWp(ctx, e.identityReference);
+      if (existingRef && existingRef.wp !== e.wp) {
+        throw new Error(`ref ${e.identityReference} already bound to another wp`);
+      }
+      const existingWp = await this.getWpToRef(ctx, e.wp);
+      if (existingWp && existingWp.ref !== e.identityReference) {
+        throw new Error(`wp ${e.wp} already bound to another ref (${existingWp.ref})`);
       }
     }
 
-    const value: WarehouseMappingValue = { identityReference, wp };
-    await ctx.stub.putPrivateData(
-      WAREHOUSE_MAPPING_COLLECTION,
-      refKey,
-      Buffer.from(JSON.stringify(value))
-    );
+    for (const e of entries) {
+      await ctx.stub.putPrivateData(
+        WAREHOUSE_MAPPING_COLLECTION,
+        this.refKey(ctx, e.identityReference),
+        Buffer.from(JSON.stringify({ wp: e.wp } as RefToWp)),
+      );
+      await ctx.stub.putPrivateData(
+        WAREHOUSE_MAPPING_COLLECTION,
+        this.wpKey(ctx, e.wp),
+        Buffer.from(JSON.stringify({ ref: e.identityReference } as WpToRef)),
+      );
+    }
 
-    const revValue: WarehouseMappingReverseValue = { identityReference };
-    await ctx.stub.putPrivateData(
-      WAREHOUSE_MAPPING_COLLECTION,
-      wpKey,
-      Buffer.from(JSON.stringify(revValue))
-    );
-    
-    ctx.stub.setEvent('WPRegistered', Buffer.from(JSON.stringify({ identityReference })));
-    return 'wp registered';
+    const mappingTxId = ctx.stub.getTxID();
+    ctx.stub.setEvent('WPBatchRegistered',
+      Buffer.from(JSON.stringify({ imBatchId, mappingTxId, count: entries.length })));
+
+    return JSON.stringify({ count: entries.length, imBatchId, mappingTxId });
   }
 
-  @Transaction(false)
-  @Returns('string')
+  @Transaction(false) @Returns('string')
   public async GetWP(ctx: Context, identityReference: string): Promise<string> {
-    const value = await this.getPrivateData<WarehouseMappingValue>(
-      ctx,
-      this.getReferenceKey(identityReference)
-    );
-    return value?.wp ?? '';
+    if (!identityReference) throw new Error('identityReference is required');
+    const v = await this.getRefToWp(ctx, identityReference);
+    return v?.wp ?? '';
   }
 
-  /**
-   * Resolves a warehouse pseudonym back to its identity reference.
-   *
-   * This is a read-only transaction used by the re-identification flow.
-   *
-   * @param ctx Fabric transaction context
-   * @param wp warehouse pseudonym to resolve
-   * @returns the associated identity reference, or an empty string when absent
-   */
-  @Transaction(false)
-  @Returns('string')
+  @Transaction(false) @Returns('string')
   public async GetIdentityReferenceByWP(ctx: Context, wp: string): Promise<string> {
-    const value = await this.getPrivateData<WarehouseMappingReverseValue>(
-      ctx,
-      this.getWpKey(wp)
-    );
-    return value?.identityReference ?? '';
+    if (!wp) throw new Error('wp is required');
+    const v = await this.getWpToRef(ctx, wp);
+    if (!v) throw new Error(`wp ${wp} not found`);
+    return v.ref;
   }
 
-  // ---------------------------------------------------------------------------
-  // Helpers
-  // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
 
-  /** Builds the private-data key for an identity-reference lookup. */
-  private getReferenceKey(identityReference: string): string {
-    return `ref:${identityReference}`;
+  private refKey(ctx: Context, ref: string): string {
+    return ctx.stub.createCompositeKey('map_ref', [ref]);
   }
 
-  /** Builds the private-data key for a warehouse-pseudonym lookup. */
-  private getWpKey(wp: string): string {
-    return `wp:${wp}`;
+  private wpKey(ctx: Context, wp: string): string {
+    return ctx.stub.createCompositeKey('map_wp', [wp]);
   }
 
-  /** Reads and deserializes a JSON value from the mapping collection. */
-  private async getPrivateData<T>(ctx: Context, key: string): Promise<T | undefined> {
-    const bytes = await ctx.stub.getPrivateData(WAREHOUSE_MAPPING_COLLECTION, key);
+  private async getRefToWp(ctx: Context, ref: string): Promise<RefToWp | undefined> {
+    const bytes = await ctx.stub.getPrivateData(WAREHOUSE_MAPPING_COLLECTION, this.refKey(ctx, ref));
     if (!bytes || bytes.length === 0) return undefined;
-    return JSON.parse(bytes.toString()) as T;
+    return JSON.parse(bytes.toString()) as RefToWp;
   }
 
-  /** Ensures that only the WPI organization can create warehouse mappings. */
+  private async getWpToRef(ctx: Context, wp: string): Promise<WpToRef | undefined> {
+    const bytes = await ctx.stub.getPrivateData(WAREHOUSE_MAPPING_COLLECTION, this.wpKey(ctx, wp));
+    if (!bytes || bytes.length === 0) return undefined;
+    return JSON.parse(bytes.toString()) as WpToRef;
+  }
+
+  private batchIdOf(ref: string): string {
+    const sep = ref.lastIndexOf(':');
+    if (sep <= 0) throw new Error(`identityReference "${ref}" is not in <batchId>:<index> format`);
+    return ref.slice(0, sep);
+  }
+
+  private getRequiredTransient(transient: Map<string, Uint8Array>, field: string): string {
+    const v = transient.get(field);
+    if (!v) throw new Error(`Transient field "${field}" is required`);
+    const s = Buffer.from(v).toString('utf8');
+    if (!s) throw new Error(`Transient field "${field}" must not be empty`);
+    return s;
+  }
+
   private assertCallerIsWpi(ctx: Context): void {
     const mspId = ctx.clientIdentity.getMSPID();
     if (mspId !== WPI_MSP_ID) {
-      throw new Error(
-        `Access denied: only ${WPI_MSP_ID} can register WPs (caller=${mspId})`
-      );
+      throw new Error(`Access denied: only ${WPI_MSP_ID} (caller=${mspId})`);
     }
   }
 }

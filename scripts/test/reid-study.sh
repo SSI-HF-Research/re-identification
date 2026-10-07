@@ -20,6 +20,26 @@ invoke_capture_txid() {
   fi
 }
 
+invoke_json_result() {
+  local output payload
+  output=$(./scripts/invokeCC.sh "$@" 2>&1) || {
+    printf '%s\n' "$output" >&2
+    return 1
+  }
+  printf '%s\n' "$output"
+
+  payload=$(printf '%s\n' "$output" \
+    | sed -n 's/.*payload:"\(.*\)".*/\1/p' \
+    | tail -n1)
+  if [ -z "$payload" ]; then
+    errorln "Chaincode invoke response did not contain a payload" >&2
+    return 1
+  fi
+
+  payload="${payload//\\\"/\"}"
+  printf '%s\n' "$payload" | jq -c .
+}
+
 CHANNEL_STUDY="${CHANNEL_STUDY:-study-channel}"
 CC_STUDY="${CC_STUDY:-study-mapping}"
 CC_SREID="${CC_SREID:-study-reidentification}"
@@ -35,17 +55,23 @@ DATAMART_ID="${DATAMART_ID:-dm-1}"
 WORKDIR="$(mktemp -d)"; trap 'rm -rf "$WORKDIR"' EXIT
 
 # ----- Setup synthetic identity + datamart mapping -----
+# A single patient: batch-of-1 on the warehouse side, single WP on the study side.
 PII="pii-reid-$(openssl rand -hex 4)"
 WP=$(node scripts/test/crypto-helper.js wp "$WP_MASTER_KEY" "$PII")
 
-CAPTURE_TXID_FILE="$WORKDIR/identity-ref" ./scripts/invokeCC.sh warehouse-channel identity-mapping \
-  '{"function":"RegisterIdentityReference","Args":[]}' \
-  "{\"pii\":\"$PII\"}" OrgIM OrgIM OrgWPI
-REF=$(cat "$WORKDIR/identity-ref")
+REFS_JSON=$(invoke_json_result warehouse-channel identity-mapping \
+  '{"function":"RegisterIdentityReferenceBatch","Args":[]}' \
+  "{\"piis\":[\"$PII\"]}" \
+  OrgIM OrgIM OrgWPI | tail -n1)
+REF=$(echo "$REFS_JSON" | jq -r '.[0]')
+[ -n "$REF" ] && [ "$REF" != "null" ] \
+  || { errorln "failed to obtain identity reference"; exit 1; }
 
+PAIRS_JSON=$(jq -nc --arg r "$REF" --arg w "$WP" '[{identityReference:$r, wp:$w}]')
 ./scripts/invokeCC.sh warehouse-channel warehouse-mapping \
-  "{\"function\":\"RegisterWP\",\"Args\":[\"$REF\"]}" \
-  "{\"wp\":\"$WP\"}" OrgWPI OrgWPI OrgHDW
+  '{"function":"RegisterWPBatch","Args":[]}' \
+  "{\"pairs\":$PAIRS_JSON}" \
+  OrgWPI OrgWPI OrgHDW
 
 STUDY_KEY=$(node scripts/test/crypto-helper.js hkdf "$SP_MASTER_KEY" "$STUDY_ID" "$DATAMART_ID")
 WP_LIST_JSON="[\"$WP\"]"
@@ -83,7 +109,7 @@ MSG1="reid_approval:${REQ_ID}:approve"
 SIG1=$(node scripts/test/ec-sign.js sign ec1.example.com "$MSG1")
 ./scripts/invokeCC.sh study-channel "$CC_SREID" \
   "{\"function\":\"SignReIDRequest\",\"Args\":[\"$REQ_ID\",\"approve\",\"$SIG1\"]}" \
-  NA OrgEC1 OrgEC1 OrgEC2  OrgRO
+  NA OrgEC1 OrgEC1 OrgEC2 OrgRO
 STATUS=$(./scripts/queryCC.sh OrgRO study-channel "$CC_SREID" \
   "{\"function\":\"GetReIDRequest\",\"Args\":[\"$REQ_ID\"]}" | jq -r .status)
 [ "$STATUS" == "pending" ] || { errorln "expected pending, got $STATUS"; exit 1; }
@@ -94,7 +120,7 @@ MSG2="reid_approval:${REQ_ID}:approve"
 SIG2=$(node scripts/test/ec-sign.js sign ec2.example.com "$MSG2")
 ./scripts/invokeCC.sh study-channel "$CC_SREID" \
   "{\"function\":\"SignReIDRequest\",\"Args\":[\"$REQ_ID\",\"approve\",\"$SIG2\"]}" \
-  NA OrgEC2 OrgEC1 OrgEC2  OrgRO
+  NA OrgEC2 OrgEC1 OrgEC2 OrgRO
 STATUS=$(./scripts/queryCC.sh OrgRO study-channel "$CC_SREID" \
   "{\"function\":\"GetReIDRequest\",\"Args\":[\"$REQ_ID\"]}" | jq -r .status)
 [ "$STATUS" == "approved" ] || { errorln "expected approved, got $STATUS"; exit 1; }

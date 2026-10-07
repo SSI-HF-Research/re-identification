@@ -9,4 +9,5 @@ wallet/
 channel-artifacts/
 crypto-config/
 log.txt
-bench-results/
+*.csv
+venv/

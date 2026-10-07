@@ -266,9 +266,9 @@ Orderer: &OrdererDefaults
         Port: 7050
         ClientTLSCert: crypto-config/ordererOrganizations/example.com/orderers/orderer.example.com/tls/server.crt
         ServerTLSCert: crypto-config/ordererOrganizations/example.com/orderers/orderer.example.com/tls/server.crt
-  BatchTimeout: 500ms
+  BatchTimeout: 50ms
   BatchSize:
-    MaxMessageCount: 10
+    MaxMessageCount: 100
     AbsoluteMaxBytes: 99 MB
     PreferredMaxBytes: 512 KB
   Policies:

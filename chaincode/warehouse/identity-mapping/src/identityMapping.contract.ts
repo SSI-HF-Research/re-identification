@@ -2,107 +2,102 @@ import { Context, Contract, Info, Returns, Transaction } from 'fabric-contract-a
 
 const IDENTITY_MAPPING_COLLECTION = 'IdentityMapping';
 const IM_MSP_ID = 'OrgIMMSP';
+const MAX_BATCH_SIZE = 1000;
 
-interface IdentityMappingValue {
-  identityReference: string;
-  pii: string;
-}
+interface IdentityRecord { pii: string; }
 
 @Info({ title: 'IdentityMappingContract', description: 'Identity mapping contract' })
 export class IdentityMappingContract extends Contract {
-  /** Creates the contract with the name exposed to Fabric. */
-  constructor() {
-    super('IdentityMappingContract');
-  }
+  constructor() { super('IdentityMappingContract'); }
 
-  /** Confirms that the identity-mapping chaincode is installed and reachable. */
-  @Transaction(false)
-  @Returns('string')
+  @Transaction(false) @Returns('string')
   public async testChaincode(ctx: Context): Promise<string> {
     return 'IdentityMappingContract is working!';
   }
 
-  /** Registers a PII value under the current Fabric transaction ID. */
-  @Transaction()
-  @Returns('string')
-  public async RegisterIdentityReference(ctx: Context): Promise<string> {
+  /**
+   * Batch ingestion of PIIs.
+   *
+   * Transient: { piis: string[] } (JSON)
+   * Returns:   JSON array of identity references, one per PII, same order.
+   *            Each ref is `<txId>:<index>` — stable, unique, and self-describing.
+   *
+   * Only the PII is persisted per ref; the batch/index metadata is implied
+   * by the key layout, so re-identification needs a single lookup.
+   */
+  @Transaction() @Returns('string')
+  public async RegisterIdentityReferenceBatch(ctx: Context): Promise<string> {
     this.assertCallerIsIM(ctx);
 
-    const transient = ctx.stub.getTransient();
-    const pii = this.getRequiredTransientValue(transient, 'pii');
-    const identityReference = ctx.stub.getTxID();
-
-    const key = this.getIdentityReferenceKey(identityReference);
-    const existing = await ctx.stub.getPrivateData(IDENTITY_MAPPING_COLLECTION, key);
-    if (existing && existing.length > 0) {
-      ctx.stub.setEvent('IdentityAlreadyExists', Buffer.from(JSON.stringify({identityReference})));
-      return identityReference;
+    const raw = this.getRequiredTransient(ctx.stub.getTransient(), 'piis');
+    let piis: unknown;
+    try { piis = JSON.parse(raw); } catch { throw new Error('Transient "piis" must be JSON'); }
+    if (!Array.isArray(piis) || piis.length === 0) {
+      throw new Error('"piis" must be a non-empty array');
+    }
+    if (piis.length > MAX_BATCH_SIZE) {
+      throw new Error(`batch size ${piis.length} exceeds ${MAX_BATCH_SIZE}`);
     }
 
-    const value: IdentityMappingValue = { identityReference, pii };
-    await ctx.stub.putPrivateData(
-      IDENTITY_MAPPING_COLLECTION,
-      key,
-      Buffer.from(JSON.stringify(value))
-    );
-    ctx.stub.setEvent('IdentityRegistered', Buffer.from(JSON.stringify({identityReference})));
-    return identityReference;
+    const txId = ctx.stub.getTxID();
+    const refs: string[] = [];
+
+    for (let i = 0; i < piis.length; i++) {
+      const pii = piis[i];
+      if (typeof pii !== 'string' || pii.length === 0) {
+        throw new Error(`piis[${i}] must be a non-empty string`);
+      }
+
+      const key = ctx.stub.createCompositeKey('ref', [txId, String(i)]);
+      const record: IdentityRecord = { pii };
+      await ctx.stub.putPrivateData(
+        IDENTITY_MAPPING_COLLECTION,
+        key,
+        Buffer.from(JSON.stringify(record)),
+      );
+      refs.push(`${txId}:${i}`);
+    }
+
+    ctx.stub.setEvent('IdentityBatchRegistered',
+      Buffer.from(JSON.stringify({ batchId: txId, count: refs.length })));
+    return JSON.stringify(refs);
   }
 
-  /** Retrieves the PII associated with an identity reference. */
-  @Transaction(false)
-  @Returns('string')
+  /**
+   * Re-identification: ref -> PII. Single lookup, no scans.
+   */
+  @Transaction(false) @Returns('string')
   public async GetPii(ctx: Context, identityReference: string): Promise<string> {
-    const value = await this.getIdentityMapping(ctx, identityReference);
-    if (!value) {
-      throw new Error(`identityReference ${identityReference} not found in Identity_Mapping`);
-    }
-    return value.pii;
-  }
-
-  /** Builds the private-data key used for an identity reference. */
-  private getIdentityReferenceKey(identityReference: string): string {
-    return `ref:${identityReference}`;
-  }
-
-  /** Reads and parses an identity mapping from the private collection. */
-  private async getIdentityMapping(
-    ctx: Context,
-    identityReference: string
-  ): Promise<IdentityMappingValue | null> {
-    const bytes = await ctx.stub.getPrivateData(
-      IDENTITY_MAPPING_COLLECTION,
-      this.getIdentityReferenceKey(identityReference)
-    );
+    if (!identityReference) throw new Error('identityReference is required');
+    const { batchId, index } = this.splitRef(identityReference);
+    const key = ctx.stub.createCompositeKey('ref', [batchId, index]);
+    const bytes = await ctx.stub.getPrivateData(IDENTITY_MAPPING_COLLECTION, key);
     if (!bytes || bytes.length === 0) {
-      return null;
+      throw new Error(`identityReference ${identityReference} not found`);
     }
-    return JSON.parse(bytes.toString()) as IdentityMappingValue;
+    return (JSON.parse(bytes.toString()) as IdentityRecord).pii;
   }
 
-  /** Decodes a required non-empty UTF-8 value from transient transaction data. */
-  private getRequiredTransientValue(
-    transient: Map<string, Uint8Array>,
-    fieldName: string
-  ): string {
-    const value = transient.get(fieldName);
-    if (!value) {
-      throw new Error(`Transient field "${fieldName}" is required`);
-    }
-    const decodedValue = Buffer.from(value).toString('utf8');
-    if (!decodedValue) {
-      throw new Error(`Transient field "${fieldName}" must not be empty`);
-    }
-    return decodedValue;
+  // -------------------------------------------------------------------------
+
+  private splitRef(ref: string): { batchId: string; index: string } {
+    const sep = ref.lastIndexOf(':');
+    if (sep <= 0) throw new Error(`invalid identityReference "${ref}"`);
+    return { batchId: ref.slice(0, sep), index: ref.slice(sep + 1) };
   }
 
-  /** Ensures that only an identity manager can register mappings. */
+  private getRequiredTransient(transient: Map<string, Uint8Array>, field: string): string {
+    const v = transient.get(field);
+    if (!v) throw new Error(`Transient field "${field}" is required`);
+    const s = Buffer.from(v).toString('utf8');
+    if (!s) throw new Error(`Transient field "${field}" must not be empty`);
+    return s;
+  }
+
   private assertCallerIsIM(ctx: Context): void {
     const mspId = ctx.clientIdentity.getMSPID();
     if (mspId !== IM_MSP_ID) {
-      throw new Error(
-        `Access denied: only ${IM_MSP_ID} can register identity references (caller=${mspId})`
-      );
+      throw new Error(`Access denied: only ${IM_MSP_ID} (caller=${mspId})`);
     }
   }
 }
