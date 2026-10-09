@@ -1,18 +1,27 @@
 const fs = require('fs');
 const path = require('path');
 const { Worker } = require('worker_threads');
-const { connectOrg } = require('./gateway');
+const { connectOrg, submit } = require('./gateway');
 const { wp, hkdf, randomPii } = require('./crypto');
 const { report } = require('./stats');
-const { flowPseudonymization, flowReidentification } = require('./workloads');
+const {
+  flowPseudonymization,
+  flowReidentification,
+  registerDatamartBatches,
+} = require('./workloads');
 
 const SCENARIOS = {
-  small:  { N: 1000,    samples: 100,  threads: 1 },
-  large:  { N: 5000,  samples: 20,  threads: 1 },
-  stress: { N: 50000, samples: 10,  threads: 1 },   // single-thread throughput
-  // Multi-thread throughput runs (independent of N):
-  mt4:    { N: 5000,  samples: 20,  threads: 4 },
-  mt16:   { N: 5000,  samples: 20,  threads: 16 },
+  small:  { N: 2000,    samples: 50,  threads: 1 },
+  large:  { N: 5000,    samples: 50,  threads: 1 },
+  stress: { N: 50000,   samples: 10,  threads: 1 },
+
+  // Multi-thread throughput runs.
+  //   N:        patients
+  //   samples:  pseudo samples per worker; reid samples = threads * samples
+  //   threads:  number of workers
+  mt4:    { N: 20000,  samples: 20,  threads: 4  },
+  mt8:    { N: 20000,  samples: 20,  threads: 8  },
+  mt16:   { N: 20000,  samples: 20,  threads: 16 },
 };
 
 const STUDY_ID = 'bench-study';
@@ -49,10 +58,8 @@ function signWith(orgKey, message) {
   return sign.sign(keyBytes, 'base64');
 }
 
-/**
- * Prepare a reusable (ref, wp, pii) triple on the warehouse channel and keep
- * a signer to produce per-request approvals + SPI attestations.
- */
+
+
 async function prepareReidFixture(conns) {
   const pii = randomPii('reid');
   const wpValue = wp(WP_MASTER_KEY, pii);
@@ -60,17 +67,12 @@ async function prepareReidFixture(conns) {
   const imCc = conns.im.gateway.getNetwork('warehouse-channel').getContract('identity-mapping');
   const wmCc = conns.wpi.gateway.getNetwork('warehouse-channel').getContract('warehouse-mapping');
 
-  // Register identity + WP with the correct API
-  const refsJson = await imCc.submit('RegisterIdentityReferenceBatch', {
-    transientData: { piis: JSON.stringify([pii]) },
-  });
-  const ref = JSON.parse(new TextDecoder().decode(refsJson))[0];
+  const r1 = await submit(imCc, 'RegisterIdentityReferenceBatch', [],
+    { piis: JSON.stringify([pii]) });
+  const ref = JSON.parse(r1.text)[0];
 
-  await wmCc.submit('RegisterWPBatch', {
-    transientData: {
-      pairs: JSON.stringify([{ identityReference: ref, wp: wpValue }]),
-    },
-  });
+  await submit(wmCc, 'RegisterWPBatch', [],
+    { pairs: JSON.stringify([{ identityReference: ref, wp: wpValue }]) });
 
   return { pii, wpValue, ref };
 }
@@ -102,16 +104,12 @@ async function runSingleThread(name, cfg) {
       flows: { pseudonymization: { perChunk: {}, aggregate: {} }, reidentification: {} },
     };
 
-    // Warm-up (discarded)
     await flowPseudonymization({
       imConn: conns.im, wpiConn: conns.wpi, spiConn: conns.spi,
       N: Math.min(20, cfg.N), studyId: STUDY_ID, datamartId: DATAMART_ID,
       wpMasterKey: WP_MASTER_KEY, spMasterKey: SP_MASTER_KEY,
     });
 
-    // ---- Flow A ----
-    // We collect per-chunk samples (flattened across samples) AND aggregate
-    // totals (one per logical N-patient ingestion).
     const chunkSamples = { A1: [], A3: [], A4: [] };
     const aggSamples   = { A1: [], A3: [], A4: [] };
 
@@ -141,7 +139,6 @@ async function runSingleThread(name, cfg) {
     out.flows.pseudonymization.aggregate.A3 = report('A3-agg', aggSamples.A3);
     out.flows.pseudonymization.aggregate.A4 = report('A4-agg', aggSamples.A4);
 
-    // ---- Flow B ----
     const fixture = await prepareReidFixture(conns);
     const bSamples = { B0: [], B1: [], B2: [], B3: [], B4: [] };
 
@@ -186,93 +183,172 @@ async function runSingleThread(name, cfg) {
 function runWorker(job) {
   return new Promise((resolve, reject) => {
     const w = new Worker(path.join(__dirname, 'worker.js'), { workerData: job });
-    w.once('message', (m) => m.ok ? resolve(m.results) : reject(new Error(m.error)));
-    w.once('error', reject);
+    let settled = false;
+    w.once('message', (m) => {
+      settled = true;
+      if (m.ok) resolve(m.results);
+      else reject(new Error(`worker ${job.tag} failed:\n${m.error}`));
+      void w.terminate();
+    });
+    w.once('error', (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
+    w.once('exit', (code) => {
+      if (!settled && code !== 0) {
+        settled = true;
+        reject(new Error(`worker stopped with exit code ${code}`));
+      }
+    });
   });
 }
 
 /**
- * Multi-thread mode: T workers each running S samples concurrently.
- * We measure wall-clock throughput (ops/s) for the whole pool.
+ * Multi-thread: each worker runs
+ *   - S pseudo samples (N patients each, warehouse phase parallel per worker)
  *
- * The workload for each worker is `reid` jobs against a per-worker fixture,
- * so they don't collide on reqId.
+ * Note: reidentification is not performed by workers in this implementation.
+ *
+ * Wall-clock and throughput are measured for the whole run.
+ * Pseudo samples are aggregated, mirroring the single-thread output shape so
+ * results/*.json are directly comparable.
  */
 async function runMultiThread(name, cfg) {
-  console.log(`\n=== scenario=${name} N=${cfg.N} samples=${cfg.samples} (threads=${cfg.threads}) ===`);
+  const patientsPerWorker = cfg.N / cfg.threads;
+  if (!Number.isInteger(patientsPerWorker)) {
+    throw new Error(`N (${cfg.N}) must be divisible by threads (${cfg.threads})`);
+  }
 
-  // 1) Prepare one fixture + pre-computed signatures per worker.
-  const fixtures = await withConnections(async (conns) => {
-    const arr = [];
-    for (let t = 0; t < cfg.threads; t++) {
-      const f = await prepareReidFixture(conns);
-      arr.push(f);
-    }
-    return arr;
-  });
+  console.log(`\n=== scenario=${name} N=${cfg.N} ` +
+    `(${patientsPerWorker}/worker) samples=${cfg.samples} (threads=${cfg.threads}) ===`);
 
-  // 2) Build one spec list per worker.
-  const perWorkerJobs = fixtures.map((f, t) => {
+  // Workers only execute warehouse phases. A4 is committed serially below
+  // after every worker has finished, using the single benchmark datamart.
+  const perWorkerJobs = Array.from({ length: cfg.threads }, (_, t) => {
     const specs = [];
     for (let s = 0; s < cfg.samples; s++) {
-      const reqIdPrefix = `mt-${name}-t${t}-s${s}-${Date.now()}`;
-      const { approvals, spiSig } = buildApprovalsAndSig({ reqId: reqIdPrefix, wpValue: f.wpValue });
-      specs.push({
-        kind: 'reid',
-        wpValue: f.wpValue,
-        spiSignature: spiSig,
-        approvals,
-        reqIdPrefix,
-        expectedPii: f.pii,
-      });
+      specs.push({ kind: 'pseudo', N: patientsPerWorker, tag: `t${t}-s${s}` });
     }
-    return specs;
+    return {
+      specs,
+      studyId: STUDY_ID,
+      datamartId: DATAMART_ID,
+      wpMasterKey: WP_MASTER_KEY, spMasterKey: SP_MASTER_KEY,
+      tag: t,
+    };
   });
 
-  // 3) Launch workers in parallel and measure wall-clock.
   const t0 = process.hrtime.bigint();
-  const results = await Promise.all(perWorkerJobs.map((specs, t) => runWorker({
-    specs,
-    studyId: STUDY_ID, datamartId: DATAMART_ID,
-    wpMasterKey: WP_MASTER_KEY, spMasterKey: SP_MASTER_KEY,
-  })));
-  const t1 = process.hrtime.bigint();
-  const wallMs = Number(t1 - t0) / 1e6;
+  const results = await Promise.all(perWorkerJobs.map(job => runWorker(job)));
 
-  // 4) Aggregate per-operation samples across all workers.
-  const flat = { B0: [], B1: [], B2: [], B3: [], B4: [] };
-  let totalOps = 0;
+  // ---- aggregate pseudo ----
+  const chunkA1 = [], chunkA3 = [], chunkA4 = [];
+  const aggA1 = [], aggA3 = [], aggA4 = [];
+  let totalPseudoOps = 0;
+  const flatB = { B0: [], B1: [], B2: [], B3: [], B4: [] };
+  let totalReidOps = 0;
+
   for (const w of results) {
     for (const r of w) {
-      if (r.kind !== 'reid') continue;
-      flat.B0.push(r.samples.B0);
-      flat.B1.push(r.samples.B1);
-      flat.B2.push(r.samples.B2);
-      flat.B3.push(r.samples.B3);
-      flat.B4.push(r.samples.B4);
-      totalOps++;
+      if (r.kind !== 'pseudo') continue;
+      chunkA1.push(...r.samples.A1);
+      chunkA3.push(...r.samples.A3);
+      aggA1.push(r.totals.A1);
+      aggA3.push(r.totals.A3);
+      totalPseudoOps++;
     }
   }
+
+  // ---- datamart: commit A4 serially after all warehouse work ----
+  // A4 and reidentification are both serialized in the parent process.
+  await withConnections(async (conns) => {
+    for (let wIdx = 0; wIdx < results.length; wIdx++) {
+      const workerResults = results[wIdx];
+      for (let rIdx = 0; rIdx < workerResults.length; rIdx++) {
+        const res = workerResults[rIdx];
+        if (res.kind !== 'pseudo') continue;
+
+        const a4Samples = await registerDatamartBatches({
+          spiConn: conns.spi,
+          studyId: STUDY_ID,
+          datamartId: DATAMART_ID,
+          spMasterKey: SP_MASTER_KEY,
+          wpsPerChunk: res.wpChunks,
+        });
+        chunkA4.push(...a4Samples);
+        aggA4.push(a4Samples.reduce((sum, value) => sum + value, 0));
+      }
+    }
+
+    // ---- reidentification: run in main thread after A4 ----
+    for (let wIdx = 0; wIdx < results.length; wIdx++) {
+      const workerResults = results[wIdx];
+      for (let rIdx = 0; rIdx < workerResults.length; rIdx++) {
+        const res = workerResults[rIdx];
+        if (res.kind !== 'pseudo') continue;
+
+        // Prepare a tiny reid fixture (single PII + WP) on the network.
+        const fixture = await prepareReidFixture(conns);
+        const reqIdPrefix = `bench-mt-reid-t${wIdx}-s${rIdx}-${Date.now()}`;
+        const { approvals, spiSig } = buildApprovalsAndSig({ reqId: reqIdPrefix, wpValue: fixture.wpValue });
+
+        const rr = await flowReidentification({
+          roConn: conns.ro, wpiConn: conns.wpi, moConn: conns.mo,
+          wpValue: fixture.wpValue, spiSignature: spiSig,
+          approvals, reqIdPrefix,
+        });
+
+        flatB.B0.push(rr.samples.B0);
+        flatB.B1.push(rr.samples.B1);
+        flatB.B2.push(rr.samples.B2);
+        flatB.B3.push(rr.samples.B3);
+        flatB.B4.push(rr.samples.B4);
+        totalReidOps++;
+      }
+    }
+  });
+
+  const t1 = process.hrtime.bigint();
+  const wallMs = Number(t1 - t0) / 1e6;
 
   const out = {
     scenario: name, config: cfg, mode: 'multi-thread',
     threads: cfg.threads, wallMs,
-    throughputOpsPerSec: +(totalOps / (wallMs / 1000)).toFixed(2),
+    throughputPseudoOpsPerSec: totalPseudoOps > 0
+      ? +(totalPseudoOps / (wallMs / 1000)).toFixed(2) : 0,
+    throughputReidOpsPerSec: totalReidOps > 0
+      ? +(totalReidOps / (wallMs / 1000)).toFixed(2) : 0,
     flows: {
-      reidentification: {
-        B0: report('B0', flat.B0),
-        B1: report('B1', flat.B1),
-        B2: report('B2', flat.B2),
-        B3: report('B3', flat.B3),
-        B4: report('B4', flat.B4),
+      pseudonymization: {
+        N: cfg.N,
+        perChunk: {
+          A1: report('A1-perchunk', chunkA1),
+          A3: report('A3-perchunk', chunkA3),
+          A4: report('A4-perchunk', chunkA4),
+        },
+        aggregate: {
+          A1: report('A1-agg', aggA1),
+          A3: report('A3-agg', aggA3),
+          A4: report('A4-agg', aggA4),
+        },
       },
+      reidentification: totalReidOps > 0 ? {
+        B0: report('B0', flatB.B0),
+        B1: report('B1', flatB.B1),
+        B2: report('B2', flatB.B2),
+        B3: report('B3', flatB.B3),
+        B4: report('B4', flatB.B4),
+      } : {},
     },
     startedAt: nowIso(),
     finishedAt: nowIso(),
   };
 
-  console.log(`  wall=${wallMs.toFixed(1)}ms  ops=${totalOps}  ` +
-    `throughput=${out.throughputOpsPerSec} ops/s`);
+  console.log(`  wall=${wallMs.toFixed(1)}ms  ` +
+    `pseudoOps=${totalPseudoOps} (${out.throughputPseudoOpsPerSec} ops/s)  ` +
+    `reidOps=${totalReidOps} (${out.throughputReidOpsPerSec} ops/s)`);
   return out;
 }
 
@@ -296,19 +372,25 @@ async function main() {
       JSON.stringify(all[name], null, 2));
   }
 
-  // ---- Summary ----
   console.log('\n================ SUMMARY ================');
   for (const [name, r] of Object.entries(all)) {
     console.log(`\n# ${name} (${r.mode})`);
     if (r.mode === 'multi-thread') {
       console.log(`  threads=${r.threads} wall=${r.wallMs.toFixed(1)}ms ` +
-        `throughput=${r.throughputOpsPerSec} ops/s`);
+        `pseudo=${r.throughputPseudoOpsPerSec} ops/s  ` +
+        `reid=${r.throughputReidOpsPerSec} ops/s`);
+      const p = r.flows.pseudonymization;
+      if (p && p.aggregate) {
+        for (const [k, rep] of Object.entries(p.aggregate)) {
+          console.log(`  pseudo-agg ${k}  mean=${rep.mean}  median=${rep.median}  stdev=${rep.stdev}`);
+        }
+      }
       for (const [k, rep] of Object.entries(r.flows.reidentification)) {
-        console.log(`  ${k}  mean=${rep.mean}  median=${rep.median}  stdev=${rep.stdev}  p95=${rep.p95}`);
+        console.log(`  reid ${k}  mean=${rep.mean}  median=${rep.median}  stdev=${rep.stdev}  p95=${rep.p95}`);
       }
       continue;
     }
-    // single-thread
+
     const p = r.flows.pseudonymization;
     if (p && p.aggregate) {
       for (const [k, rep] of Object.entries(p.aggregate)) {

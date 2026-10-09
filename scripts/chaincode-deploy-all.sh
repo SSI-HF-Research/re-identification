@@ -52,19 +52,19 @@ add_deployment() {
 }
 
 add_deployment warehouse-channel identity-mapping \
-  ./chaincode/warehouse/identity-mapping "$WAREHOUSE_COLLECTIONS" 3.0 3 \
+  ./chaincode/warehouse/identity-mapping "$WAREHOUSE_COLLECTIONS" 1.0 1 \
   "${WAREHOUSE_ORGS[@]}"
 add_deployment warehouse-channel warehouse-mapping \
-  ./chaincode/warehouse/warehouse-mapping "$WAREHOUSE_COLLECTIONS" 3.0 3 \
+  ./chaincode/warehouse/warehouse-mapping "$WAREHOUSE_COLLECTIONS" 1.0 1 \
   "${WAREHOUSE_ORGS[@]}"
 add_deployment warehouse-channel warehouse-reidentification \
-  ./chaincode/warehouse/warehouse-reidentification "$WAREHOUSE_COLLECTIONS" 3.0 3 \
+  ./chaincode/warehouse/warehouse-reidentification "$WAREHOUSE_COLLECTIONS" 1.0 1 \
   "${W_REID_ORGS[@]}"
 add_deployment study-channel study-mapping \
-  ./chaincode/study/study-mapping "$STUDY_COLLECTIONS" 3.0 3 \
+  ./chaincode/study/study-mapping "$STUDY_COLLECTIONS" 1.0 1 \
   "${STUDY_ORGS[@]}"
 add_deployment study-channel study-reidentification \
-  ./chaincode/study/study-reidentification "$STUDY_COLLECTIONS" 3.0 3 \
+  ./chaincode/study/study-reidentification "$STUDY_COLLECTIONS" 1.0 1 \
   "${S_REID_ORGS[@]}"
 
 run_deployment() {

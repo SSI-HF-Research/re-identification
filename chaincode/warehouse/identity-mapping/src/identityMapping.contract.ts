@@ -2,7 +2,7 @@ import { Context, Contract, Info, Returns, Transaction } from 'fabric-contract-a
 
 const IDENTITY_MAPPING_COLLECTION = 'IdentityMapping';
 const IM_MSP_ID = 'OrgIMMSP';
-const MAX_BATCH_SIZE = 1000;
+const MAX_BATCH_SIZE = 10000;
 
 interface IdentityRecord { pii: string; }
 

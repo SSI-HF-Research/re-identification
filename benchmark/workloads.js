@@ -7,7 +7,7 @@ const CC_IDENTITY       = 'identity-mapping';
 const CC_WAREHOUSE      = 'warehouse-mapping';
 const CC_STUDY          = 'study-mapping';
 
-const MAX_CHUNK = 1000; // must match MAX_BATCH_SIZE in the chaincodes
+const MAX_CHUNK = 10000; // must match MAX_BATCH_SIZE in the chaincodes
 
 function chunk(arr, size) {
   const out = [];
@@ -17,86 +17,139 @@ function chunk(arr, size) {
 
 /**
  * Flow A — pseudonymization: PII -> REF -> WP -> SP.
- * One datamart, one study. Batches are automatically split into chunks of
- * MAX_CHUNK to respect the chaincode limit.
  *
- * Returns per-chunk latencies and the aggregate (sum) so callers can report
- * both "per-batch" and "per-N-patients" numbers.
+ * Warehouse phase (A1, A3) can run in parallel across chunks; the datamart
+ * phase (A4) is always serial because all chunks share the same datamart
+ * map and the chaincode's RegisterSPBatch is not safe for concurrent
+ * write-after-write on the same key.
+ *
+ * `parallelWarehouse` controls A1/A3 parallelism only.
  */
 async function flowPseudonymization({
   imConn, wpiConn, spiConn,
   N, studyId, datamartId, wpMasterKey, spMasterKey,
   chunkSize = MAX_CHUNK,
+  parallelWarehouse = false,
+  registerDatamart = true,
 }) {
   const imCc = imConn.gateway.getNetwork(CHANNEL_WAREHOUSE).getContract(CC_IDENTITY);
   const wmCc = wpiConn.gateway.getNetwork(CHANNEL_WAREHOUSE).getContract(CC_WAREHOUSE);
-  const smCc = spiConn.gateway.getNetwork(CHANNEL_STUDY).getContract(CC_STUDY);
-
   const piis = Array.from({ length: N }, () => randomPii('bench'));
   const piiChunks = chunk(piis, chunkSize);
 
-  const A1 = []; // per-chunk IM batch latency
-  const A3 = []; // per-chunk WM batch latency
-  const A4 = []; // per-chunk SM batch latency
-  const refsAll = [];
-  const wpsAll  = [];
+  const A1 = [];   // per-chunk, in chunk order
+  const A3 = [];   // per-chunk, in chunk order
+  const A4 = [];   // per-chunk, in chunk order
+  const allRefs = [];
+  const allWps  = [];
 
-  for (const piiChunk of piiChunks) {
-    // [A1] IdentityMapping batch
-    const r1 = await submit(imCc, 'RegisterIdentityReferenceBatch', [], {
-      piis: JSON.stringify(piiChunk),
+  // -------------------------------------------------------------------------
+  // Phase 1 — warehouse (A1: IM batch, A3: WM batch)
+  // -------------------------------------------------------------------------
+  let wpsPerChunk;   // string[][]   aligned with piiChunks
+  let refsPerChunk;  // string[][]   aligned with piiChunks
+
+  if (parallelWarehouse) {
+    // A1 — all chunks in parallel
+    const a1Results = await Promise.all(
+      piiChunks.map(pc =>
+        submit(imCc, 'RegisterIdentityReferenceBatch', [], { piis: JSON.stringify(pc) })
+      )
+    );
+    refsPerChunk = a1Results.map(r => JSON.parse(r.text));
+    // record A1 latencies in chunk order
+    a1Results.forEach(r => A1.push(r.ms));
+
+    // derive WPs per chunk
+    wpsPerChunk = piiChunks.map(pc => pc.map(p => wp(wpMasterKey, p)));
+
+    // A3 — all chunks in parallel
+    const a3Results = await Promise.all(
+      refsPerChunk.map((refs, i) => {
+        const pairs = refs.map((ref, j) => ({
+          identityReference: ref,
+          wp: wpsPerChunk[i][j],
+        }));
+        return submit(wmCc, 'RegisterWPBatch', [], { pairs: JSON.stringify(pairs) });
+      })
+    );
+    a3Results.forEach(r => A3.push(r.ms));
+  } else {
+    refsPerChunk = [];
+    wpsPerChunk  = [];
+    for (const pc of piiChunks) {
+      const r1 = await submit(imCc, 'RegisterIdentityReferenceBatch', [], {
+        piis: JSON.stringify(pc),
+      });
+      const refs = JSON.parse(r1.text);
+      A1.push(r1.ms);
+      refsPerChunk.push(refs);
+
+      const wps = pc.map(p => wp(wpMasterKey, p));
+      wpsPerChunk.push(wps);
+
+      const pairs = refs.map((ref, j) => ({ identityReference: ref, wp: wps[j] }));
+      const r3 = await submit(wmCc, 'RegisterWPBatch', [], { pairs: JSON.stringify(pairs) });
+      A3.push(r3.ms);
+    }
+  }
+
+  // flatten for the caller
+  for (let i = 0; i < piiChunks.length; i++) {
+    allRefs.push(...refsPerChunk[i]);
+    allWps.push(...wpsPerChunk[i]);
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 2 — datamart (A4) serial, one RegisterSPBatch per chunk
+  // -------------------------------------------------------------------------
+  if (registerDatamart) {
+    const datamartSamples = await registerDatamartBatches({
+      spiConn, studyId, datamartId, spMasterKey, wpsPerChunk,
     });
-    const refs = JSON.parse(r1.text);
-    A1.push(r1.ms);
-
-    // [A2] client-side WP derivation
-    const wps = piiChunk.map(p => wp(wpMasterKey, p));
-    const pairs = refs.map((r, i) => ({ identityReference: r, wp: wps[i] }));
-
-    // [A3] WarehouseMapping batch
-    const r3 = await submit(wmCc, 'RegisterWPBatch', [], {
-      pairs: JSON.stringify(pairs),
-    });
-    A3.push(r3.ms);
-
-    // [A4] StudyMapping batch (same datamart for all chunks)
-    const studyKey = hkdf(spMasterKey, studyId, datamartId);
-    const r4 = await submit(smCc, 'RegisterSPBatch', [datamartId], {
-      studyKey,
-      wpList: JSON.stringify(wps),
-    });
-    A4.push(r4.ms);
-
-    refsAll.push(...refs);
-    wpsAll.push(...wps);
+    A4.push(...datamartSamples);
   }
 
   const sum = a => a.reduce((s, x) => s + x, 0);
   return {
-    // per-chunk samples (useful for stats)
     samples: { A1, A3, A4 },
-    // aggregate (sum over chunks) — one "logical operation" for N patients
     totals: { A1: sum(A1), A3: sum(A3), A4: sum(A4), chunks: piiChunks.length },
-    refs: refsAll,
-    wps: wpsAll,
+    refs: allRefs,
+    wps: allWps,
+    wpChunks: wpsPerChunk,
   };
 }
 
+async function registerDatamartBatches({
+  spiConn, studyId, datamartId, spMasterKey, wpsPerChunk,
+}) {
+  const smCc = spiConn.gateway.getNetwork(CHANNEL_STUDY).getContract(CC_STUDY);
+  const studyKey = hkdf(spMasterKey, studyId, datamartId);
+  const samples = [];
+
+  for (const wps of wpsPerChunk) {
+    const r4 = await submit(smCc, 'RegisterSPBatch', [datamartId], {
+      studyKey,
+      wpList: JSON.stringify(wps),
+    });
+    samples.push(r4.ms);
+  }
+  return samples;
+}
+
 /**
- * Flow B — re-identification. Same as before; a single logical operation,
- * no chunking needed (the request is per-patient by design).
+ * Flow B — re-identification. Single logical operation, no chunking.
  */
 async function flowReidentification({
   roConn, wpiConn, moConn,
   wpValue, spiSignature, approvals, reqIdPrefix,
 }) {
-  const roWReid = roConn.gateway.getNetwork(CHANNEL_WAREHOUSE).getContract('warehouse-reidentification');
+  const roWReid  = roConn.gateway.getNetwork(CHANNEL_WAREHOUSE).getContract('warehouse-reidentification');
   const wpiWReid = wpiConn.gateway.getNetwork(CHANNEL_WAREHOUSE).getContract('warehouse-reidentification');
-  const moWReid = moConn.gateway.getNetwork(CHANNEL_WAREHOUSE).getContract('warehouse-reidentification');
-  const wpiWm   = wpiConn.gateway.getNetwork(CHANNEL_WAREHOUSE).getContract(CC_WAREHOUSE);
-  const wpiIm   = wpiConn.gateway.getNetwork(CHANNEL_WAREHOUSE).getContract(CC_IDENTITY);
+  const moWReid  = moConn.gateway.getNetwork(CHANNEL_WAREHOUSE).getContract('warehouse-reidentification');
+  const wpiWm    = wpiConn.gateway.getNetwork(CHANNEL_WAREHOUSE).getContract(CC_WAREHOUSE);
+  const wpiIm    = wpiConn.gateway.getNetwork(CHANNEL_WAREHOUSE).getContract(CC_IDENTITY);
 
-  // Signatures are created by the caller for this exact request ID.
   const reqId = reqIdPrefix;
 
   const b0 = await submit(roWReid, 'CreateWarehouseReIDRequest', [reqId], {
@@ -117,4 +170,9 @@ async function flowReidentification({
   };
 }
 
-module.exports = { flowPseudonymization, flowReidentification, MAX_CHUNK };
+module.exports = {
+  flowPseudonymization,
+  flowReidentification,
+  registerDatamartBatches,
+  MAX_CHUNK,
+};

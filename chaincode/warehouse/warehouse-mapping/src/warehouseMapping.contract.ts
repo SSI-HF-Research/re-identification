@@ -2,7 +2,7 @@ import { Context, Contract, Returns, Transaction } from 'fabric-contract-api';
 
 const WAREHOUSE_MAPPING_COLLECTION = 'WarehouseMapping';
 const WPI_MSP_ID = 'OrgWPIMSP';
-const MAX_BATCH_SIZE = 1000;
+const MAX_BATCH_SIZE = 10000;
 
 interface RefToWp { wp: string; }
 interface WpToRef { ref: string; }
