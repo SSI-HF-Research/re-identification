@@ -110,14 +110,18 @@ async function flowPseudonymization({
     A4.push(...datamartSamples);
   }
 
-  const sum = a => a.reduce((s, x) => s + x, 0);
-  return {
-    samples: { A1, A3, A4 },
-    totals: { A1: sum(A1), A3: sum(A3), A4: sum(A4), chunks: piiChunks.length },
-    refs: allRefs,
-    wps: allWps,
-    wpChunks: wpsPerChunk,
-  };
+    const sum = a => a.reduce((s, x) => s + x, 0);
+    return {
+      samples: { A1, A3, A4 },
+      totals: {
+        A1: sum(A1), A3: sum(A3), A4: sum(A4),
+        chunks: piiChunks.length,
+        patients: N,
+      },
+      refs: allRefs,
+      wps: allWps,
+      wpChunks: wpsPerChunk,
+    };
 }
 
 async function registerDatamartBatches({
